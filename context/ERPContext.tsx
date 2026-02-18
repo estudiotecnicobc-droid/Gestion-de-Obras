@@ -1,6 +1,7 @@
+
 import React, { createContext, useContext, useMemo, ReactNode, useEffect } from 'react';
-import { Material, Task, TaskYield, TaskToolYield, Tool, Project, BudgetItem, ImportResult, LaborCategory, ProjectTemplate, Snapshot, Reception, Subcontractor, Contract, Certification, CalendarPreset, ProjectDocument, MeasurementSheet, Crew, TaskCrewYield } from '../types';
-import { INITIAL_MATERIALS, INITIAL_TASKS, INITIAL_YIELDS, INITIAL_PROJECT, INITIAL_TOOLS, INITIAL_TOOL_YIELDS, INITIAL_LABOR_CATEGORIES, INITIAL_RUBROS, INITIAL_CALENDAR_PRESETS, INITIAL_CREWS, INITIAL_CREW_YIELDS } from '../constants';
+import { Material, Task, TaskYield, TaskToolYield, Tool, Project, BudgetItem, ImportResult, LaborCategory, ProjectTemplate, Snapshot, Reception, Subcontractor, Contract, Certification, CalendarPreset, ProjectDocument, MeasurementSheet, Crew, TaskCrewYield, QualityProtocol, QualityInspection, NonConformity } from '../types';
+import { INITIAL_MATERIALS, INITIAL_TASKS, INITIAL_YIELDS, INITIAL_PROJECT, INITIAL_TOOLS, INITIAL_TOOL_YIELDS, INITIAL_LABOR_CATEGORIES, INITIAL_RUBROS, INITIAL_CALENDAR_PRESETS, INITIAL_CREWS, INITIAL_CREW_YIELDS, INITIAL_QUALITY_PROTOCOLS } from '../constants';
 import { useAuth } from './AuthContext';
 import { usePersistentState } from '../hooks/usePersistentState';
 
@@ -29,7 +30,9 @@ interface ERPContextType {
   activeProjectId: string | null;
   createNewProject: (data: Partial<Project>) => void;
   setActiveProject: (id: string) => void;
+  exitProject: () => void; // NEW: Go back to Hub
   deleteProject: (id: string) => void;
+  saveProject: () => Promise<void>; 
 
   snapshots: Snapshot[];
   receptions: Reception[];
@@ -39,6 +42,11 @@ interface ERPContextType {
   calendarPresets: CalendarPreset[];
   documents: ProjectDocument[];
   measurementSheets: MeasurementSheet[];
+  
+  // Quality Management
+  qualityProtocols: QualityProtocol[];
+  qualityInspections: QualityInspection[];
+  nonConformities: NonConformity[];
 
   // Optimization Indexes (For O(1) Lookups)
   materialsMap: Record<string, Material>;
@@ -46,9 +54,9 @@ interface ERPContextType {
   toolsMap: Record<string, Tool>;
   laborCategoriesMap: Record<string, LaborCategory>;
   crewsMap: Record<string, Crew>;
-  yieldsIndex: Record<string, TaskYield[]>; // taskId -> yields[]
-  toolYieldsIndex: Record<string, TaskToolYield[]>; // taskId -> toolYields[]
-  taskCrewYieldsIndex: Record<string, TaskCrewYield[]>; // taskId -> crewYields[]
+  yieldsIndex: Record<string, TaskYield[]>; 
+  toolYieldsIndex: Record<string, TaskToolYield[]>; 
+  taskCrewYieldsIndex: Record<string, TaskCrewYield[]>; 
   
   // Actions
   addMaterial: (m: Material) => void;
@@ -57,6 +65,7 @@ interface ERPContextType {
   
   addTask: (t: Task) => void;
   updateTask: (id: string, updates: Partial<Task>) => void;
+  updateTaskMaster: (taskId: string, updates: Partial<Task>) => void; // NEW: Master Sync Function
   removeTask: (id: string) => void;
   
   addTool: (t: Tool) => void;
@@ -92,6 +101,10 @@ interface ERPContextType {
   createSnapshot: (name: string, totalCost: number) => void;
   resetData: () => void;
 
+  // Database Management
+  exportDatabase: () => string;
+  importDatabase: (json: string) => ImportResult;
+
   addReception: (reception: Reception) => void;
   getProjectStockStatus: () => MaterialStockStatus[];
 
@@ -109,6 +122,13 @@ interface ERPContextType {
   removeDocument: (id: string) => void;
   saveMeasurementSheet: (sheet: MeasurementSheet) => void;
   syncMeasurementToBudget: (sheetId: string) => void; 
+
+  // Quality Actions
+  addQualityProtocol: (p: QualityProtocol) => void;
+  updateQualityProtocol: (id: string, updates: Partial<QualityProtocol>) => void;
+  addQualityInspection: (i: QualityInspection) => void;
+  addNonConformity: (n: NonConformity) => void;
+  updateNonConformity: (id: string, updates: Partial<NonConformity>) => void;
 }
 
 const ERPContext = createContext<ERPContextType | undefined>(undefined);
@@ -145,6 +165,11 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [allDocuments, setAllDocuments] = usePersistentState<ProjectDocument[]>('erp_documents', []);
   const [allMeasurementSheets, setAllMeasurementSheets] = usePersistentState<MeasurementSheet[]>('erp_measurements', []);
 
+  // Quality Data
+  const [allQualityProtocols, setAllQualityProtocols] = usePersistentState<QualityProtocol[]>('erp_quality_protocols', migrate(INITIAL_QUALITY_PROTOCOLS));
+  const [allQualityInspections, setAllQualityInspections] = usePersistentState<QualityInspection[]>('erp_quality_inspections', []);
+  const [allNonConformities, setAllNonConformities] = usePersistentState<NonConformity[]>('erp_non_conformities', []);
+
   // --- FILTERED DATA (MULTITENANT) ---
   const materials = useMemo(() => allMaterials.filter(x => x.organizationId === orgId), [allMaterials, orgId]);
   const tasks = useMemo(() => allTasks.filter(x => x.organizationId === orgId), [allTasks, orgId]);
@@ -157,6 +182,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   
   const project = useMemo(() => {
       // Find active project or default to the first one, or a placeholder if none exist
+      // NOTE: Logic slightly changed to support ProjectSelector. If no activeProjectId is set, we might return a default but UI should handle 'null' ID.
       return projects.find(p => p.id === activeProjectId) || projects[0] || { 
           ...INITIAL_PROJECT, 
           id: `new_${orgId}`, 
@@ -166,13 +192,6 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       };
   }, [projects, activeProjectId, orgId]);
 
-  // Set active project ID on load if not set and projects exist
-  useEffect(() => {
-      if (!activeProjectId && projects.length > 0) {
-          setActiveProjectId(projects[0].id);
-      }
-  }, [projects, activeProjectId, setActiveProjectId]);
-
   const snapshots = useMemo(() => allSnapshots.filter(x => x.organizationId === orgId), [allSnapshots, orgId]);
   const receptions = useMemo(() => allReceptions.filter(x => x.organizationId === orgId), [allReceptions, orgId]);
   const subcontractors = useMemo(() => allSubcontractors.filter(x => x.organizationId === orgId), [allSubcontractors, orgId]);
@@ -180,6 +199,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const certifications = useMemo(() => allCertifications.filter(x => x.organizationId === orgId), [allCertifications, orgId]);
   const documents = useMemo(() => allDocuments.filter(x => x.organizationId === orgId && x.projectId === project.id), [allDocuments, orgId, project.id]);
   const measurementSheets = useMemo(() => allMeasurementSheets.filter(x => x.organizationId === orgId), [allMeasurementSheets, orgId]);
+  
+  const qualityProtocols = useMemo(() => allQualityProtocols.filter(x => x.organizationId === orgId), [allQualityProtocols, orgId]);
+  const qualityInspections = useMemo(() => allQualityInspections.filter(x => x.organizationId === orgId && x.projectId === project.id), [allQualityInspections, orgId, project.id]);
+  const nonConformities = useMemo(() => allNonConformities.filter(x => x.organizationId === orgId && x.projectId === project.id), [allNonConformities, orgId, project.id]);
 
   // --- OPTIMIZATION INDEXES ---
   const materialsMap = useMemo(() => {
@@ -238,8 +261,41 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const removeMaterial = (id: string) => setAllMaterials(prev => prev.filter(m => m.id !== id));
 
   const addTask = (t: Task) => setAllTasks(prev => [...prev, { ...t, organizationId: orgId }]);
+  
   const updateTask = (id: string, updates: Partial<Task>) => 
     setAllTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+
+  // NEW: Master Sync Function
+  const updateTaskMaster = (taskId: string, updates: Partial<Task>) => {
+      // 1. Update basic task info
+      updateTask(taskId, updates);
+
+      // 2. Cascade Update Resources if present in 'updates'
+      // Materials Sync
+      if (updates.materialsYield) {
+          setYields(prev => {
+              const others = prev.filter(y => y.taskId !== taskId);
+              return [...others, ...updates.materialsYield!];
+          });
+      }
+
+      // Tools Sync
+      if (updates.equipmentYield) {
+          setToolYields(prev => {
+              const others = prev.filter(y => y.taskId !== taskId);
+              return [...others, ...updates.equipmentYield!];
+          });
+      }
+
+      // Crews/Labor Sync
+      if (updates.laborYield) {
+          setTaskCrewYields(prev => {
+              const others = prev.filter(y => y.taskId !== taskId);
+              return [...others, ...updates.laborYield!];
+          });
+      }
+  };
+
   const removeTask = (id: string) => setAllTasks(prev => prev.filter(t => t.id !== id));
 
   const addTool = (t: Tool) => setAllTools(prev => [...prev, { ...t, organizationId: orgId }]);
@@ -263,6 +319,10 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // --- PROJECT ACTIONS ---
   const setActiveProject = (id: string) => {
       setActiveProjectId(id);
+  };
+
+  const exitProject = () => {
+      setActiveProjectId(null);
   };
 
   const createNewProject = (data: Partial<Project>) => {
@@ -290,6 +350,17 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setAllProjects(prev => prev.map(proj => 
         (proj.id === project.id && proj.organizationId === orgId) ? { ...proj, ...p } : proj
     ));
+  };
+
+  // --- SAVE PROJECT ACTION (MANUAL TRIGGER) ---
+  const saveProject = async () => {
+      // Force a refresh of the project state to the persistent storage.
+      return new Promise<void>((resolve) => {
+          setTimeout(() => {
+              setAllProjects(prev => [...prev]);
+              resolve();
+          }, 600); // Simulate network/save delay for UX
+      });
   };
 
   const addBudgetItem = (item: BudgetItem) => {
@@ -435,6 +506,67 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setActiveProjectId(null);
   };
 
+  // --- DATABASE EXPORT / IMPORT (PERSISTENCE) ---
+  const exportDatabase = (): string => {
+      const db = {
+          version: '1.0',
+          timestamp: new Date().toISOString(),
+          data: {
+              allMaterials,
+              allTasks,
+              allTools,
+              allLaborCategories,
+              allCrews,
+              allProjects,
+              yields,
+              toolYields,
+              taskCrewYields,
+              rubros,
+              calendarPresets,
+              allDocuments,
+              allMeasurementSheets,
+              allQualityProtocols,
+              allQualityInspections,
+              allNonConformities
+          }
+      };
+      return JSON.stringify(db, null, 2);
+  };
+
+  const importDatabase = (json: string): ImportResult => {
+      try {
+          const db = JSON.parse(json);
+          if (!db.data) return { success: false, message: 'Formato de respaldo inválido.' };
+          
+          if(confirm('ADVERTENCIA: Esta acción sobrescribirá todos los datos actuales. ¿Desea continuar?')) {
+              setAllMaterials(db.data.allMaterials || []);
+              setAllTasks(db.data.allTasks || []);
+              setAllTools(db.data.allTools || []);
+              setAllLaborCategories(db.data.allLaborCategories || []);
+              setAllCrews(db.data.allCrews || []);
+              setAllProjects(db.data.allProjects || []);
+              setYields(db.data.yields || []);
+              setToolYields(db.data.toolYields || []);
+              setTaskCrewYields(db.data.taskCrewYields || []);
+              setRubros(db.data.rubros || INITIAL_RUBROS);
+              setCalendarPresets(db.data.calendarPresets || []);
+              setAllDocuments(db.data.allDocuments || []);
+              setAllMeasurementSheets(db.data.allMeasurementSheets || []);
+              setAllQualityProtocols(db.data.allQualityProtocols || []);
+              setAllQualityInspections(db.data.allQualityInspections || []);
+              setAllNonConformities(db.data.allNonConformities || []);
+              
+              // Reset active state
+              setActiveProjectId(null);
+              
+              return { success: true, message: 'Base de datos restaurada correctamente.' };
+          }
+          return { success: false, message: 'Restauración cancelada.' };
+      } catch (e) {
+          return { success: false, message: 'Error al leer el archivo JSON.' };
+      }
+  };
+
   const importData = (type: 'materials' | 'tasks' | 'tools' | 'labor', jsonData: string): ImportResult => {
     try {
       const parsed = JSON.parse(jsonData);
@@ -506,15 +638,26 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       updateBudgetItem(sheet.budgetItemId, { quantity: sheet.totalQuantity });
   };
 
+  // --- QUALITY MANAGEMENT ---
+  const addQualityProtocol = (p: QualityProtocol) => setAllQualityProtocols(prev => [...prev, {...p, organizationId: orgId}]);
+  const updateQualityProtocol = (id: string, updates: Partial<QualityProtocol>) => 
+      setAllQualityProtocols(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+  
+  const addQualityInspection = (i: QualityInspection) => setAllQualityInspections(prev => [i, ...prev]);
+  const addNonConformity = (n: NonConformity) => setAllNonConformities(prev => [n, ...prev]);
+  const updateNonConformity = (id: string, updates: Partial<NonConformity>) =>
+      setAllNonConformities(prev => prev.map(n => n.id === id ? { ...n, ...updates } : n));
+
   return (
     <ERPContext.Provider value={{
       materials, tasks, yields, tools, toolYields, laborCategories, crews, rubros, project, projects, activeProjectId,
       snapshots, receptions, subcontractors, contracts, certifications, calendarPresets, documents, measurementSheets, taskCrewYields,
+      qualityProtocols, qualityInspections, nonConformities,
       // Indexes
       materialsMap, tasksMap, toolsMap, yieldsIndex, toolYieldsIndex, laborCategoriesMap, crewsMap, taskCrewYieldsIndex,
       // Actions
       addMaterial, updateMaterial, removeMaterial,
-      addTask, updateTask, removeTask,
+      addTask, updateTask, updateTaskMaster, removeTask,
       addTool, updateTool, removeTool,
       addLaborCategory, updateLaborCategory, removeLaborCategory,
       addCrew, updateCrew, removeCrew,
@@ -522,11 +665,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       updateProjectSettings, addBudgetItem, removeBudgetItem, updateBudgetItem,
       addTaskYield, removeTaskYield, addTaskToolYield, removeTaskToolYield, addTaskCrewYield, removeTaskCrewYield,
       loadTemplate, importData, createSnapshot, resetData,
+      exportDatabase, importDatabase,
       addReception, getProjectStockStatus,
       addSubcontractor, updateSubcontractor, addContract, addCertification,
       addCalendarPreset, applyCalendarPreset,
       addDocument, removeDocument, saveMeasurementSheet, syncMeasurementToBudget,
-      createNewProject, setActiveProject, deleteProject
+      createNewProject, setActiveProject, deleteProject, saveProject, exitProject,
+      // Quality
+      addQualityProtocol, updateQualityProtocol, addQualityInspection, addNonConformity, updateNonConformity
     }}>
       {children}
     </ERPContext.Provider>

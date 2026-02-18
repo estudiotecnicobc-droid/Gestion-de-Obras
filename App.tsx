@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect } from 'react';
-import { ERPProvider } from './context/ERPContext';
+import { ERPProvider, useERP } from './context/ERPContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Layout } from './components/Layout';
 import { Login } from './components/Login';
@@ -15,6 +16,9 @@ import { ManagementPanel } from './components/ManagementPanel';
 import { Subcontractors } from './components/Subcontractors';
 import { DocumentManager } from './components/DocumentManager';
 import { MeasurementSheetComponent } from './components/MeasurementSheet';
+import { QualityControl } from './components/QualityControl';
+import { ProjectHub } from './components/ProjectHub';
+import { APUBuilder } from './components/APUBuilder';
 import { Role } from './types';
 
 // Route Protection Component (Middleware Simulation)
@@ -38,19 +42,20 @@ const ProtectedRoute: React.FC<{
 
 const AppContent = () => {
   const { user } = useAuth();
+  const { activeProjectId } = useERP();
   const [activeTab, setActiveTab] = useState('dashboard');
 
-  // Redirect to allowed tab on login if dashboard is restricted (though dashboard is usually open)
-  useEffect(() => {
-      if (user && user.role === 'foreman' && activeTab === 'budget') {
-          setActiveTab('reception');
-      }
-  }, [user]);
-
+  // STATE 1: Unauthenticated
   if (!user) {
     return <Login />;
   }
 
+  // STATE 2: Authenticated but No Project Selected -> HUB
+  if (!activeProjectId) {
+      return <ProjectHub />;
+  }
+
+  // STATE 3: Active Project (Main Layout)
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard': 
@@ -61,6 +66,8 @@ const AppContent = () => {
         return <ProtectedRoute allowedRoles={['admin', 'engineering']}><Subcontractors /></ProtectedRoute>;
       case 'budget': 
         return <ProtectedRoute allowedRoles={['admin', 'engineering']}><BudgetEditor /></ProtectedRoute>;
+      case 'apu':
+        return <ProtectedRoute allowedRoles={['admin', 'engineering']}><APUBuilder /></ProtectedRoute>;
       case 'grid': 
         return <ProtectedRoute allowedRoles={['admin', 'engineering']}><BudgetGrid /></ProtectedRoute>;
       case 'planning': 
@@ -77,23 +84,25 @@ const AppContent = () => {
         return <ProtectedRoute allowedRoles={['admin', 'engineering', 'foreman', 'client']}><DocumentManager /></ProtectedRoute>;
       case 'measurements':
         return <ProtectedRoute allowedRoles={['admin', 'engineering']}><MeasurementSheetComponent /></ProtectedRoute>;
+      case 'quality':
+        return <ProtectedRoute allowedRoles={['admin', 'engineering', 'foreman']}><QualityControl /></ProtectedRoute>;
       default: return <Dashboard />;
     }
   };
 
   return (
-    <ERPProvider>
-      <Layout activeTab={activeTab} setActiveTab={setActiveTab}>
-        {renderContent()}
-      </Layout>
-    </ERPProvider>
+    <Layout activeTab={activeTab} setActiveTab={setActiveTab}>
+      {renderContent()}
+    </Layout>
   );
 };
 
 const App = () => {
   return (
     <AuthProvider>
-      <AppContent />
+      <ERPProvider>
+        <AppContent />
+      </ERPProvider>
     </AuthProvider>
   );
 };

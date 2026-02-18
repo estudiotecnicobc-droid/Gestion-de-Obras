@@ -1,17 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Building, MapPin, User, Calendar, Save, CreditCard, Briefcase, CheckCircle, Ruler, Component, Layers, ArrowDownCircle, BookOpen, Clock, CalendarX, Plus, Trash2, FolderOpen, Bookmark } from 'lucide-react';
-import { CONSTRUCTION_SYSTEMS, STRUCTURE_TYPES, FOUNDATION_TYPES, PROJECT_TEMPLATES } from '../constants';
-import { Holiday } from '../types';
+import { Building, MapPin, User, Calendar, Save, CreditCard, Briefcase, CheckCircle, Ruler, Component, Layers, ArrowDownCircle, BookOpen, Clock, CalendarX, Plus, Trash2, FolderOpen, Bookmark, DollarSign, Users, HardHat, UserPlus, Download, Upload } from 'lucide-react';
+import { CONSTRUCTION_SYSTEMS, STRUCTURE_TYPES, FOUNDATION_TYPES, PROJECT_TEMPLATES, DEFAULT_PRICING_CONFIG } from '../constants';
+import { Holiday, ProjectLaborDefinition, ProjectCrewDefinition, CalendarPreset } from '../types';
+
+type Tab = 'general' | 'financial' | 'calendar' | 'labor';
 
 export const ProjectSettings: React.FC = () => {
-  const { project, updateProjectSettings, loadTemplate, calendarPresets, addCalendarPreset, applyCalendarPreset } = useERP();
+  const { project, updateProjectSettings, loadTemplate, calendarPresets, addCalendarPreset, applyCalendarPreset, deleteProject, laborCategories, crews, laborCategoriesMap } = useERP();
+  const [activeTab, setActiveTab] = useState<Tab>('general');
+
   const [formData, setFormData] = useState({
     name: '',
     client: '',
     address: '',
     companyName: '',
     startDate: '',
+    endDate: '', // Added End Date
     currency: '$',
     surface: '',
     constructionSystem: '',
@@ -22,446 +27,567 @@ export const ProjectSettings: React.FC = () => {
     workdayEndTime: "17:00",
     lunchBreakDuration: 60
   });
+  
+  // Pricing Form Data
+  const [pricingData, setPricingData] = useState(DEFAULT_PRICING_CONFIG);
+
   const [workingDays, setWorkingDays] = useState<number[]>([1,2,3,4,5]);
   const [nonWorkingDates, setNonWorkingDates] = useState<Holiday[]>([]);
-  
-  // New holiday form
-  const [newHolidayDate, setNewHolidayDate] = useState('');
-  const [newHolidayDesc, setNewHolidayDesc] = useState('');
-  
-  // Preset form
-  const [presetName, setPresetName] = useState('');
+  const [newHoliday, setNewHoliday] = useState({ date: '', description: '' });
+
+  // Calendar Preset State
   const [selectedPresetId, setSelectedPresetId] = useState('');
 
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [selectedTemplateId, setSelectedTemplateId] = useState('');
-  const [loadMsg, setLoadMsg] = useState('');
+  // Labor Force Data
+  const [laborForce, setLaborForce] = useState<ProjectLaborDefinition[]>([]);
+  const [assignedCrews, setAssignedCrews] = useState<ProjectCrewDefinition[]>([]);
 
   useEffect(() => {
-    if (project) {
-      setFormData({
-        name: project.name || '',
-        client: project.client || '',
-        address: project.address || '',
-        companyName: project.companyName || '',
-        startDate: project.startDate || '',
-        currency: project.currency || '$',
-        surface: project.surface?.toString() || '',
-        constructionSystem: project.constructionSystem || '',
-        structureType: project.structureType || '',
-        foundationType: project.foundationType || '',
-        workdayHours: project.workdayHours || 9,
-        workdayStartTime: project.workdayStartTime || "08:00",
-        workdayEndTime: project.workdayEndTime || "17:00",
-        lunchBreakDuration: project.lunchBreakDuration || 60
-      });
-      setWorkingDays(project.workingDays || [1,2,3,4,5]);
-      setNonWorkingDates(project.nonWorkingDates || []);
-    }
+      if (project) {
+          setFormData({
+              name: project.name || '',
+              client: project.client || '',
+              address: project.address || '',
+              companyName: project.companyName || '',
+              startDate: project.startDate || '',
+              endDate: project.endDate || '', // Load endDate
+              currency: project.currency || '$',
+              surface: project.surface?.toString() || '',
+              constructionSystem: project.constructionSystem || '',
+              structureType: project.structureType || '',
+              foundationType: project.foundationType || '',
+              workdayHours: project.workdayHours || 9,
+              workdayStartTime: project.workdayStartTime || "08:00",
+              workdayEndTime: project.workdayEndTime || "17:00",
+              lunchBreakDuration: project.lunchBreakDuration || 60
+          });
+          setPricingData(project.pricing || DEFAULT_PRICING_CONFIG);
+          setWorkingDays(project.workingDays || [1,2,3,4,5]);
+          setNonWorkingDates(project.nonWorkingDates || []);
+          setLaborForce(project.laborForce || []);
+          setAssignedCrews(project.assignedCrews || []);
+      }
   }, [project]);
 
   const handleSave = () => {
-    updateProjectSettings({
-      ...formData,
-      surface: parseFloat(formData.surface) || 0,
-      workingDays: workingDays.sort(),
-      nonWorkingDates: nonWorkingDates
-    });
-    setShowSuccess(true);
-    setTimeout(() => setShowSuccess(false), 3000);
+      updateProjectSettings({
+          ...formData,
+          surface: parseFloat(formData.surface) || 0,
+          pricing: pricingData,
+          workingDays,
+          nonWorkingDates,
+          laborForce,
+          assignedCrews
+      });
+      // Simple feedback
+      const btn = document.getElementById('save-btn');
+      if(btn) {
+          const originalText = btn.innerText;
+          btn.innerText = 'Guardado!';
+          setTimeout(() => btn.innerText = originalText, 2000);
+      }
   };
 
+  // --- Calendar Logic ---
   const toggleWorkingDay = (dayIndex: number) => {
-      const currentDays = new Set(workingDays);
-      if (currentDays.has(dayIndex)) {
-          currentDays.delete(dayIndex);
+      if (workingDays.includes(dayIndex)) {
+          setWorkingDays(workingDays.filter(d => d !== dayIndex));
       } else {
-          currentDays.add(dayIndex);
+          setWorkingDays([...workingDays, dayIndex].sort());
       }
-      setWorkingDays(Array.from(currentDays));
   };
 
   const addHoliday = () => {
-      if(newHolidayDate && !nonWorkingDates.find(h => h.date === newHolidayDate)) {
-          setNonWorkingDates([...nonWorkingDates, { date: newHolidayDate, description: newHolidayDesc || 'Feriado' }].sort((a,b) => a.date.localeCompare(b.date)));
-          setNewHolidayDate('');
-          setNewHolidayDesc('');
+      if (newHoliday.date && newHoliday.description) {
+          setNonWorkingDates([...nonWorkingDates, { ...newHoliday }]);
+          setNewHoliday({ date: '', description: '' });
       }
   };
 
   const removeHoliday = (date: string) => {
-      setNonWorkingDates(nonWorkingDates.filter(d => d.date !== date));
+      setNonWorkingDates(nonWorkingDates.filter(h => h.date !== date));
   };
 
-  const handleLoadTemplate = () => {
-    const tmpl = PROJECT_TEMPLATES.find(t => t.id === selectedTemplateId);
-    if (tmpl) {
-      if(window.confirm(`¿Cargar plantilla "${tmpl.name}"?\nEsto agregará ${tmpl.tasks.length} tareas a su base de datos y al presupuesto actual.`)) {
-        loadTemplate(tmpl);
-        setLoadMsg(`Se cargaron ${tmpl.tasks.length} ítems exitosamente.`);
-        setTimeout(() => setLoadMsg(''), 3000);
+  const handleLoadPreset = () => {
+      if (!selectedPresetId) return;
+      const preset = calendarPresets.find(p => p.id === selectedPresetId);
+      if (preset) {
+          setFormData(prev => ({
+              ...prev,
+              workdayHours: preset.workdayHours,
+              workdayStartTime: preset.workdayStartTime,
+              workdayEndTime: preset.workdayEndTime,
+              lunchBreakDuration: preset.lunchBreakDuration
+          }));
+          setWorkingDays(preset.workingDays);
+          setNonWorkingDates(preset.nonWorkingDates); // Optional: Do we want to load holidays from template? Yes.
+          alert(`Plantilla "${preset.name}" aplicada. Recuerde guardar los cambios.`);
       }
-    }
   };
 
-  // --- Calendar Presets Logic ---
-  const handleSavePreset = () => {
-      if (!presetName) return;
-      addCalendarPreset({
+  const handleCreatePreset = () => {
+      const name = prompt("Ingrese un nombre para el nuevo calendario:");
+      if (!name) return;
+
+      const newPreset: CalendarPreset = {
           id: crypto.randomUUID(),
-          name: presetName,
+          name,
           workdayHours: formData.workdayHours,
           workdayStartTime: formData.workdayStartTime,
           workdayEndTime: formData.workdayEndTime,
           lunchBreakDuration: formData.lunchBreakDuration,
-          workingDays: workingDays,
-          nonWorkingDates: nonWorkingDates
-      });
-      setPresetName('');
-      alert("Configuración de calendario guardada como plantilla.");
+          workingDays,
+          nonWorkingDates
+      };
+      addCalendarPreset(newPreset);
+      setSelectedPresetId(newPreset.id);
   };
 
-  const handleApplyPreset = () => {
-      if (!selectedPresetId) return;
-      if (window.confirm("¿Aplicar esta configuración de calendario al proyecto actual? Esto sobrescribirá sus ajustes de jornada y feriados.")) {
-          applyCalendarPreset(selectedPresetId);
-          setSelectedPresetId('');
+  const handleDeleteProject = () => {
+      if (window.confirm("¿Está seguro de eliminar este proyecto permanentemente? Esta acción no se puede deshacer.")) {
+          deleteProject(project.id);
       }
   };
 
+  // --- Labor Management Handlers ---
+  const updateLaborCount = (id: string, delta: number) => {
+      setLaborForce(prev => {
+          const existing = prev.find(l => l.laborCategoryId === id);
+          if (existing) {
+              const newCount = Math.max(0, existing.count + delta);
+              if (newCount === 0) return prev.filter(l => l.laborCategoryId !== id);
+              return prev.map(l => l.laborCategoryId === id ? { ...l, count: newCount } : l);
+          } else if (delta > 0) {
+              return [...prev, { laborCategoryId: id, count: delta }];
+          }
+          return prev;
+      });
+  };
+
+  const updateCrewCount = (id: string, delta: number) => {
+      setAssignedCrews(prev => {
+          const existing = prev.find(c => c.crewId === id);
+          if (existing) {
+              const newCount = Math.max(0, existing.count + delta);
+              if (newCount === 0) return prev.filter(c => c.crewId !== id);
+              return prev.map(c => c.crewId === id ? { ...c, count: newCount } : c);
+          } else if (delta > 0) {
+              return [...prev, { crewId: id, count: delta }];
+          }
+          return prev;
+      });
+  };
+
+  // Calculate Daily Labor Cost of Defined Force
+  const dailyLaborCost = useMemo(() => {
+      let totalHourly = 0;
+      
+      // Individual
+      laborForce.forEach(lf => {
+          const cat = laborCategoriesMap[lf.laborCategoryId];
+          if(cat) {
+              const hourly = (cat.basicHourlyRate * (1 + (cat.socialChargesPercent + cat.insurancePercent)/100));
+              totalHourly += hourly * lf.count;
+          }
+      });
+
+      // Crews
+      assignedCrews.forEach(ac => {
+          const crew = crews.find(c => c.id === ac.crewId);
+          if(crew) {
+              crew.composition.forEach(member => {
+                  const cat = laborCategoriesMap[member.laborCategoryId];
+                  if(cat) {
+                      const hourly = (cat.basicHourlyRate * (1 + (cat.socialChargesPercent + cat.insurancePercent)/100));
+                      // Crew composition participation
+                      const part = (member.participation ?? 100) / 100;
+                      totalHourly += hourly * member.count * part * ac.count;
+                  }
+              });
+          }
+      });
+
+      return totalHourly * formData.workdayHours;
+  }, [laborForce, assignedCrews, laborCategoriesMap, crews, formData.workdayHours]);
+
+  const DAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
   return (
-    <div className="space-y-6 max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20">
-      <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-100">
-        <div className="flex items-center gap-4 mb-8 border-b border-slate-100 pb-6">
-          <div className="p-3 bg-slate-900 text-white rounded-xl shadow-lg shadow-slate-200">
-            <Building size={32} />
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold text-slate-800">Configuración de Obra</h2>
-            <p className="text-slate-500">Defina los parámetros generales y legales del proyecto actual.</p>
-          </div>
+    <div className="space-y-6 animate-in fade-in duration-500 pb-20">
+        
+        {/* Header */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div>
+                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <Briefcase className="text-blue-600" /> Configuración del Proyecto
+                </h2>
+                <p className="text-sm text-slate-500">Parámetros generales, técnicos, financieros y recursos.</p>
+            </div>
+            <div className="flex gap-2">
+                <button 
+                    onClick={handleDeleteProject}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-red-200 text-red-600 hover:bg-red-50 rounded-lg text-sm font-bold transition-all"
+                >
+                    <Trash2 size={18} /> Eliminar Proyecto
+                </button>
+                <button 
+                    id="save-btn"
+                    onClick={handleSave}
+                    className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg text-sm font-bold shadow-lg shadow-blue-200 transition-all"
+                >
+                    <Save size={18} /> Guardar Cambios
+                </button>
+            </div>
         </div>
 
-        {showSuccess && (
-          <div className="mb-6 bg-green-50 text-green-700 p-4 rounded-lg flex items-center gap-2 border border-green-200 animate-in fade-in">
-            <CheckCircle size={20} />
-            <span className="font-bold">Configuración guardada exitosamente.</span>
-          </div>
-        )}
+        {/* Tab Navigation */}
+        <div className="flex space-x-1 bg-slate-100 p-1 rounded-xl">
+            <button 
+                onClick={() => setActiveTab('general')}
+                className={`flex-1 py-2 px-4 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'general' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:bg-slate-200'}`}
+            >
+                <Building size={16} /> General y Técnico
+            </button>
+            <button 
+                onClick={() => setActiveTab('financial')}
+                className={`flex-1 py-2 px-4 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'financial' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:bg-slate-200'}`}
+            >
+                <DollarSign size={16} /> Financiero
+            </button>
+            <button 
+                onClick={() => setActiveTab('calendar')}
+                className={`flex-1 py-2 px-4 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'calendar' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:bg-slate-200'}`}
+            >
+                <Calendar size={16} /> Calendario
+            </button>
+            <button 
+                onClick={() => setActiveTab('labor')}
+                className={`flex-1 py-2 px-4 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'labor' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:bg-slate-200'}`}
+            >
+                <Users size={16} /> Plantel de Obra
+            </button>
+        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          {/* Columna Izquierda: Datos del Proyecto */}
-          <div className="space-y-6">
-            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-              <Briefcase size={16} /> Datos del Proyecto
-            </h3>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 min-h-[500px]">
             
-            <div className="space-y-2">
-              <label className="block text-sm font-semibold text-slate-700">Nombre del Proyecto</label>
-              <input
-                type="text"
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-                value={formData.name}
-                onChange={e => setFormData({...formData, name: e.target.value})}
-                placeholder="Ej: Edificio Altamira"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-sm font-semibold text-slate-700">Cliente / Comitente</label>
-              <div className="relative">
-                <User size={18} className="absolute left-3 top-3.5 text-slate-400" />
-                <input
-                  type="text"
-                  className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-                  value={formData.client}
-                  onChange={e => setFormData({...formData, client: e.target.value})}
-                  placeholder="Nombre del Cliente"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-sm font-semibold text-slate-700">Ubicación de la Obra</label>
-              <div className="relative">
-                <MapPin size={18} className="absolute left-3 top-3.5 text-slate-400" />
-                <input
-                  type="text"
-                  className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-                  value={formData.address}
-                  onChange={e => setFormData({...formData, address: e.target.value})}
-                  placeholder="Dirección del sitio"
-                />
-              </div>
-            </div>
-
-            {/* Ficha Técnica (Nueva Sección) */}
-            <div className="pt-4 border-t border-slate-100">
-               <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2 mb-4">
-                  <Ruler size={16} /> Especificaciones Técnicas
-               </h3>
-               
-               <div className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="block text-sm font-semibold text-slate-700">Superficie Cubierta (m²)</label>
-                    <input
-                        type="number"
-                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all font-mono font-bold"
-                        value={formData.surface}
-                        onChange={e => setFormData({...formData, surface: e.target.value})}
-                        placeholder="0.00"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="block text-sm font-semibold text-slate-700">Sistema Constructivo</label>
-                    <div className="relative">
-                        <Component size={18} className="absolute left-3 top-3.5 text-slate-400" />
-                        <select 
-                           className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all appearance-none"
-                           value={formData.constructionSystem}
-                           onChange={e => setFormData({...formData, constructionSystem: e.target.value})}
-                        >
-                            <option value="">-- Seleccionar --</option>
-                            {CONSTRUCTION_SYSTEMS.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
+            {/* TAB: GENERAL */}
+            {activeTab === 'general' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-in fade-in">
+                    <div className="space-y-4">
+                        <h3 className="font-bold text-slate-700 flex items-center gap-2 border-b border-slate-100 pb-2">
+                            <Building size={18} className="text-slate-400" /> Información General
+                        </h3>
+                        <div className="grid grid-cols-1 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nombre de la Obra</label>
+                                <input className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cliente</label>
+                                    <div className="relative">
+                                        <User size={16} className="absolute left-3 top-2.5 text-slate-400" />
+                                        <input className="w-full pl-9 p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none" value={formData.client} onChange={e => setFormData({...formData, client: e.target.value})} />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Empresa Constructora</label>
+                                    <input className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none" value={formData.companyName} onChange={e => setFormData({...formData, companyName: e.target.value})} />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Dirección / Ubicación</label>
+                                <div className="relative">
+                                    <MapPin size={16} className="absolute left-3 top-2.5 text-slate-400" />
+                                    <input className="w-full pl-9 p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none" value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Fecha de Inicio</label>
+                                    <input type="date" className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Moneda</label>
+                                    <select className="w-full p-2 border border-slate-300 rounded bg-white" value={formData.currency} onChange={e => setFormData({...formData, currency: e.target.value})}>
+                                        <option value="$">Peso Argentino ($)</option>
+                                        <option value="USD">Dólar (USD)</option>
+                                        <option value="EUR">Euro (€)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                  </div>
 
-                  <div className="space-y-2">
-                    <label className="block text-sm font-semibold text-slate-700">Tipo de Estructura</label>
-                    <div className="relative">
-                        <Building size={18} className="absolute left-3 top-3.5 text-slate-400" />
-                        <select 
-                           className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all appearance-none"
-                           value={formData.structureType}
-                           onChange={e => setFormData({...formData, structureType: e.target.value})}
-                        >
-                            <option value="">-- Seleccionar --</option>
-                            {STRUCTURE_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
+                    <div className="space-y-4">
+                        <h3 className="font-bold text-slate-700 flex items-center gap-2 border-b border-slate-100 pb-2">
+                            <Ruler size={18} className="text-slate-400" /> Ficha Técnica
+                        </h3>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Superficie Total (m²)</label>
+                                <input type="number" className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none font-bold" value={formData.surface} onChange={e => setFormData({...formData, surface: e.target.value})} />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Sistema Constructivo</label>
+                                <select className="w-full p-2 border border-slate-300 rounded bg-white" value={formData.constructionSystem} onChange={e => setFormData({...formData, constructionSystem: e.target.value})}>
+                                    <option value="">Seleccionar...</option>
+                                    {CONSTRUCTION_SYSTEMS.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Tipo de Estructura</label>
+                                <select className="w-full p-2 border border-slate-300 rounded bg-white" value={formData.structureType} onChange={e => setFormData({...formData, structureType: e.target.value})}>
+                                    <option value="">Seleccionar...</option>
+                                    {STRUCTURE_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Fundaciones</label>
+                                <select className="w-full p-2 border border-slate-300 rounded bg-white" value={formData.foundationType} onChange={e => setFormData({...formData, foundationType: e.target.value})}>
+                                    <option value="">Seleccionar...</option>
+                                    {FOUNDATION_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                            </div>
+                        </div>
                     </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="block text-sm font-semibold text-slate-700">Fundaciones</label>
-                    <div className="relative">
-                        <Layers size={18} className="absolute left-3 top-3.5 text-slate-400" />
-                        <select 
-                           className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all appearance-none"
-                           value={formData.foundationType}
-                           onChange={e => setFormData({...formData, foundationType: e.target.value})}
-                        >
-                            <option value="">-- Seleccionar --</option>
-                            {FOUNDATION_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                    </div>
-                  </div>
-               </div>
-            </div>
-          </div>
-
-          {/* Columna Derecha: Configuración y Empresa */}
-          <div className="space-y-6">
-            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-              <Building size={16} /> Datos Corporativos y Sistema
-            </h3>
-
-            <div className="space-y-2">
-              <label className="block text-sm font-semibold text-slate-700">Empresa Constructora</label>
-              <input
-                type="text"
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-                value={formData.companyName}
-                onChange={e => setFormData({...formData, companyName: e.target.value})}
-                placeholder="Su Empresa S.A."
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="block text-sm font-semibold text-slate-700">Fecha de Inicio</label>
-                  <div className="relative">
-                    <Calendar size={18} className="absolute left-3 top-3.5 text-slate-400" />
-                    <input
-                      type="date"
-                      className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-                      value={formData.startDate}
-                      onChange={e => setFormData({...formData, startDate: e.target.value})}
-                    />
-                  </div>
-                  <p className="text-[10px] text-slate-400">Determina el inicio del Diagrama de Gantt.</p>
                 </div>
+            )}
 
-                <div className="space-y-2">
-                  <label className="block text-sm font-semibold text-slate-700">Moneda</label>
-                  <div className="relative">
-                    <CreditCard size={18} className="absolute left-3 top-3.5 text-slate-400" />
-                    <select
-                      className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all appearance-none"
-                      value={formData.currency}
-                      onChange={e => setFormData({...formData, currency: e.target.value})}
-                    >
-                      <option value="$">$ (Peso/Dólar)</option>
-                      <option value="€">€ (Euro)</option>
-                      <option value="S/">S/ (Sol)</option>
-                      <option value="UF">UF (Unidad Fomento)</option>
-                    </select>
-                  </div>
+            {/* TAB: FINANCIAL */}
+            {activeTab === 'financial' && (
+                <div className="animate-in fade-in max-w-2xl">
+                    <h3 className="font-bold text-slate-700 flex items-center gap-2 border-b border-slate-100 pb-2 mb-4">
+                        <DollarSign size={18} className="text-slate-400" /> Estructura de Costos Indirectos
+                    </h3>
+                    <div className="grid grid-cols-2 gap-6">
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Gastos Generales (%)</label>
+                            <input type="number" className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-right font-mono" value={pricingData.generalExpensesPercent} onChange={e => setPricingData({...pricingData, generalExpensesPercent: parseFloat(e.target.value)})} />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Beneficio / Utilidad (%)</label>
+                            <input type="number" className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-right font-mono" value={pricingData.profitPercent} onChange={e => setPricingData({...pricingData, profitPercent: parseFloat(e.target.value)})} />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Gastos Financieros (%)</label>
+                            <input type="number" className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-right font-mono" value={pricingData.financialExpensesPercent} onChange={e => setPricingData({...pricingData, financialExpensesPercent: parseFloat(e.target.value)})} />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Impuestos (IVA/IIBB) (%)</label>
+                            <input type="number" className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-right font-mono" value={pricingData.taxPercent} onChange={e => setPricingData({...pricingData, taxPercent: parseFloat(e.target.value)})} />
+                        </div>
+                    </div>
+                    
+                    <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 mt-6">
+                        <p className="text-[10px] text-slate-500 italic">
+                            <strong>Nota:</strong> Estos porcentajes se utilizan para calcular el precio de venta final en los reportes, aplicándose sobre el Costo Directo total.
+                        </p>
+                    </div>
                 </div>
-            </div>
+            )}
 
-            {/* Jornada Laboral */}
-            <div className="pt-4 border-t border-slate-100">
-               <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2 mb-4">
-                  <Clock size={16} /> Jornada y Calendario
-               </h3>
-               
-               <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-4">
-                   
-                   {/* Actions Row */}
-                   <div className="flex justify-between items-center bg-blue-50/50 p-2 rounded-lg border border-blue-100 mb-4">
-                       <div className="flex gap-2">
-                           <input 
-                             placeholder="Guardar como Plantilla..." 
-                             className="text-xs p-1.5 border rounded w-32"
-                             value={presetName}
-                             onChange={e => setPresetName(e.target.value)}
-                           />
-                           <button onClick={handleSavePreset} disabled={!presetName} className="text-blue-600 hover:text-blue-800 disabled:opacity-50"><Bookmark size={16}/></button>
-                       </div>
-                       <div className="flex gap-2">
-                           <select 
-                             className="text-xs p-1.5 border rounded max-w-[120px]"
-                             value={selectedPresetId}
-                             onChange={e => setSelectedPresetId(e.target.value)}
-                           >
-                               <option value="">Cargar Plantilla...</option>
-                               {calendarPresets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                           </select>
-                           <button onClick={handleApplyPreset} disabled={!selectedPresetId} className="text-emerald-600 hover:text-emerald-800 disabled:opacity-50"><FolderOpen size={16}/></button>
-                       </div>
-                   </div>
+            {/* TAB: CALENDAR */}
+            {activeTab === 'calendar' && (
+                <div className="animate-in fade-in max-w-2xl">
+                    <h3 className="font-bold text-slate-700 flex items-center gap-2 border-b border-slate-100 pb-2 mb-4">
+                        <Calendar size={18} className="text-slate-400" /> Jornada y Calendario
+                    </h3>
+                    
+                    <div className="space-y-6">
+                        {/* PRESET MANAGER */}
+                        <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex flex-col md:flex-row gap-4 items-end">
+                            <div className="flex-1 w-full">
+                                <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Plantillas de Calendario</label>
+                                <select 
+                                    className="w-full p-2 border border-blue-200 rounded text-sm text-slate-700"
+                                    value={selectedPresetId}
+                                    onChange={(e) => setSelectedPresetId(e.target.value)}
+                                >
+                                    <option value="">-- Seleccionar Plantilla --</option>
+                                    {calendarPresets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                </select>
+                            </div>
+                            <button 
+                                onClick={handleLoadPreset}
+                                disabled={!selectedPresetId}
+                                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                            >
+                                <Download size={16} /> Cargar
+                            </button>
+                            <button 
+                                onClick={handleCreatePreset}
+                                className="px-4 py-2 bg-white border border-blue-200 text-blue-700 rounded-lg text-sm font-bold hover:bg-blue-100 flex items-center gap-2"
+                            >
+                                <Upload size={16} /> Guardar como Nuevo
+                            </button>
+                        </div>
 
-                   {/* Horarios */}
-                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                       <div className="col-span-1">
-                           <label className="block text-xs font-bold text-slate-600 mb-1">Entrada</label>
-                           <input type="time" className="w-full p-2 border rounded text-sm" value={formData.workdayStartTime} onChange={e => setFormData({...formData, workdayStartTime: e.target.value})} />
-                       </div>
-                       <div className="col-span-1">
-                           <label className="block text-xs font-bold text-slate-600 mb-1">Salida</label>
-                           <input type="time" className="w-full p-2 border rounded text-sm" value={formData.workdayEndTime} onChange={e => setFormData({...formData, workdayEndTime: e.target.value})} />
-                       </div>
-                       <div className="col-span-1">
-                           <label className="block text-xs font-bold text-slate-600 mb-1">Almuerzo (min)</label>
-                           <input type="number" className="w-full p-2 border rounded text-sm" value={formData.lunchBreakDuration} onChange={e => setFormData({...formData, lunchBreakDuration: parseFloat(e.target.value)})} />
-                       </div>
-                       <div className="col-span-1">
-                           <label className="block text-xs font-bold text-slate-600 mb-1">Total (h)</label>
-                           <input type="number" className="w-full p-2 border rounded text-sm bg-slate-100 font-bold" value={formData.workdayHours} readOnly />
-                       </div>
-                   </div>
+                        {/* New Date Range Section */}
+                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 flex items-center gap-2">
+                                <Clock size={14} /> Límites Temporales del Proyecto
+                            </h4>
+                            <div className="grid grid-cols-2 gap-6">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Inicio de Obra</label>
+                                    <input 
+                                        type="date" 
+                                        className="w-full p-2 border border-slate-300 rounded bg-white text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
+                                        value={formData.startDate} 
+                                        onChange={e => setFormData({...formData, startDate: e.target.value})} 
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Fin de Obra (Previsto)</label>
+                                    <input 
+                                        type="date" 
+                                        className="w-full p-2 border border-slate-300 rounded bg-white text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
+                                        value={formData.endDate} 
+                                        onChange={e => setFormData({...formData, endDate: e.target.value})} 
+                                    />
+                                </div>
+                            </div>
+                        </div>
 
-                   {/* Dias Laborables */}
-                   <div>
-                       <label className="block text-xs font-bold text-slate-600 mb-2">Días Laborables Semanales</label>
-                       <div className="flex gap-2">
-                          {['D','L','M','M','J','V','S'].map((day, i) => {
-                              const isActive = workingDays.includes(i);
-                              return (
-                                  <button 
-                                    key={i}
-                                    onClick={() => toggleWorkingDay(i)}
-                                    className={`w-8 h-8 rounded font-bold text-xs transition-all border ${isActive ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-400 border-slate-200'}`}
-                                  >
-                                      {day}
-                                  </button>
-                              )
-                          })}
-                       </div>
-                   </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Días Laborables</label>
+                            <div className="flex gap-2">
+                                {DAYS.map((day, idx) => (
+                                    <button 
+                                        key={idx}
+                                        onClick={() => toggleWorkingDay(idx)}
+                                        className={`w-10 h-10 rounded-full text-xs font-bold transition-all ${workingDays.includes(idx) ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
+                                    >
+                                        {day}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
 
-                   {/* Feriados y Excepciones */}
-                   <div>
-                       <label className="block text-xs font-bold text-slate-600 mb-2 flex items-center gap-2">
-                           <CalendarX size={14} className="text-red-500" /> Días No Laborables (Feriados)
-                       </label>
-                       <div className="flex gap-2 mb-2">
-                           <input 
-                              type="date" 
-                              className="w-32 p-2 border border-slate-200 rounded text-sm"
-                              value={newHolidayDate}
-                              onChange={e => setNewHolidayDate(e.target.value)}
-                           />
-                           <input 
-                              type="text" 
-                              className="flex-1 p-2 border border-slate-200 rounded text-sm"
-                              placeholder="Motivo (ej: Navidad)"
-                              value={newHolidayDesc}
-                              onChange={e => setNewHolidayDesc(e.target.value)}
-                           />
-                           <button onClick={addHoliday} disabled={!newHolidayDate} className="px-3 py-2 bg-slate-800 text-white rounded text-xs font-bold hover:bg-black disabled:opacity-50 flex items-center gap-1">
-                               <Plus size={14} /> Agregar
-                           </button>
-                       </div>
-                       <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
-                           {nonWorkingDates.length === 0 && <span className="text-xs text-slate-400 italic">No hay feriados cargados.</span>}
-                           {nonWorkingDates.map(h => (
-                               <div key={h.date} className="flex items-center gap-2 bg-red-50 text-red-700 px-3 py-1 rounded-full text-xs font-medium border border-red-100" title={h.description}>
-                                   <span>{new Date(h.date).toLocaleDateString()} - {h.description}</span>
-                                   <button onClick={() => removeHoliday(h.date)} className="hover:text-red-900"><Trash2 size={12} /></button>
-                               </div>
-                           ))}
-                       </div>
-                   </div>
-               </div>
-            </div>
+                        <div className="grid grid-cols-3 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Horas Jornada</label>
+                                <input type="number" className="w-full p-2 border border-slate-300 rounded text-center" value={formData.workdayHours} onChange={e => setFormData({...formData, workdayHours: parseFloat(e.target.value)})} />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Hora Inicio</label>
+                                <input type="time" className="w-full p-2 border border-slate-300 rounded text-center" value={formData.workdayStartTime} onChange={e => setFormData({...formData, workdayStartTime: e.target.value})} />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Hora Fin</label>
+                                <input type="time" className="w-full p-2 border border-slate-300 rounded text-center" value={formData.workdayEndTime} onChange={e => setFormData({...formData, workdayEndTime: e.target.value})} />
+                            </div>
+                        </div>
 
-            {/* Template Loader */}
-            <div className="mt-8 bg-blue-50 border border-blue-100 rounded-xl p-5">
-               <h3 className="text-sm font-bold text-blue-800 uppercase tracking-wider flex items-center gap-2 mb-3">
-                  <BookOpen size={16} /> Precarga de Tareas
-               </h3>
-               <p className="text-xs text-blue-600 mb-4">
-                 Puede cargar un listado estándar de tareas según el tipo de obra para acelerar la carga del presupuesto.
-               </p>
-               
-               <div className="space-y-3">
-                  <select 
-                    className="w-full p-2 text-sm border border-blue-200 rounded-lg focus:outline-none"
-                    value={selectedTemplateId}
-                    onChange={e => setSelectedTemplateId(e.target.value)}
-                  >
-                     <option value="">-- Seleccionar Plantilla --</option>
-                     {PROJECT_TEMPLATES.map(t => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                     ))}
-                  </select>
-                  
-                  <button 
-                    onClick={handleLoadTemplate}
-                    disabled={!selectedTemplateId}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                     <ArrowDownCircle size={18} /> Cargar Tareas al Presupuesto
-                  </button>
-                  {loadMsg && <p className="text-xs font-bold text-green-600 text-center animate-in fade-in">{loadMsg}</p>}
-               </div>
-            </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Feriados y Días No Laborables</label>
+                            <div className="flex gap-2 mb-2">
+                                <input type="date" className="p-2 border border-slate-300 rounded text-sm" value={newHoliday.date} onChange={e => setNewHoliday({...newHoliday, date: e.target.value})} />
+                                <input type="text" className="flex-1 p-2 border border-slate-300 rounded text-sm" placeholder="Descripción (ej: Navidad)" value={newHoliday.description} onChange={e => setNewHoliday({...newHoliday, description: e.target.value})} />
+                                <button onClick={addHoliday} disabled={!newHoliday.date} className="bg-slate-800 text-white px-3 py-2 rounded hover:bg-black disabled:opacity-50"><Plus size={16} /></button>
+                            </div>
+                            <div className="max-h-32 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 space-y-1">
+                                {nonWorkingDates.length === 0 && <p className="text-xs text-slate-400 italic text-center">Sin feriados configurados.</p>}
+                                {nonWorkingDates.map((h, i) => (
+                                    <div key={i} className="flex justify-between items-center text-xs bg-white p-2 rounded border border-slate-100">
+                                        <span className="font-bold text-slate-700">{new Date(h.date).toLocaleDateString()}</span>
+                                        <span className="text-slate-500 flex-1 ml-2">{h.description}</span>
+                                        <button onClick={() => removeHoliday(h.date)} className="text-red-400 hover:text-red-600"><Trash2 size={12} /></button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
-          </div>
+            {/* TAB: LABOR FORCE (NEW) */}
+            {activeTab === 'labor' && (
+                <div className="animate-in fade-in flex flex-col lg:flex-row gap-8">
+                    {/* Left: Configuration */}
+                    <div className="flex-1 space-y-8">
+                        {/* Individual Workers */}
+                        <div>
+                            <h3 className="font-bold text-slate-700 flex items-center gap-2 border-b border-slate-100 pb-2 mb-4">
+                                <UserPlus size={18} className="text-blue-500" /> Personal Individual (Jornales)
+                            </h3>
+                            <div className="space-y-2">
+                                {laborCategories.map(cat => {
+                                    const assigned = laborForce.find(l => l.laborCategoryId === cat.id)?.count || 0;
+                                    return (
+                                        <div key={cat.id} className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                            <div>
+                                                <div className="font-bold text-sm text-slate-700">{cat.role}</div>
+                                                <div className="text-xs text-slate-400">${cat.basicHourlyRate}/h (Básico)</div>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <button onClick={() => updateLaborCount(cat.id, -1)} className="w-8 h-8 rounded-full bg-white border border-slate-300 flex items-center justify-center hover:bg-slate-100 text-slate-500 font-bold">-</button>
+                                                <span className="w-8 text-center font-bold text-lg">{assigned}</span>
+                                                <button onClick={() => updateLaborCount(cat.id, 1)} className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700 shadow-sm font-bold">+</button>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Crews */}
+                        <div>
+                            <h3 className="font-bold text-slate-700 flex items-center gap-2 border-b border-slate-100 pb-2 mb-4">
+                                <HardHat size={18} className="text-orange-500" /> Cuadrillas Armadas
+                            </h3>
+                            <div className="space-y-2">
+                                {crews.map(crew => {
+                                    const assigned = assignedCrews.find(c => c.crewId === crew.id)?.count || 0;
+                                    return (
+                                        <div key={crew.id} className="flex justify-between items-center bg-orange-50 p-3 rounded-lg border border-orange-100">
+                                            <div>
+                                                <div className="font-bold text-sm text-slate-800">{crew.name}</div>
+                                                <div className="text-xs text-slate-500">{crew.description}</div>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <button onClick={() => updateCrewCount(crew.id, -1)} className="w-8 h-8 rounded-full bg-white border border-slate-300 flex items-center justify-center hover:bg-slate-100 text-slate-500 font-bold">-</button>
+                                                <span className="w-8 text-center font-bold text-lg">{assigned}</span>
+                                                <button onClick={() => updateCrewCount(crew.id, 1)} className="w-8 h-8 rounded-full bg-orange-600 text-white flex items-center justify-center hover:bg-orange-700 shadow-sm font-bold">+</button>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Right: Summary Card */}
+                    <div className="w-full lg:w-80">
+                        <div className="bg-slate-800 text-white p-6 rounded-xl shadow-lg sticky top-6">
+                            <h4 className="text-xs font-bold text-slate-400 uppercase mb-4 tracking-wider">Resumen del Plantel</h4>
+                            
+                            <div className="mb-6">
+                                <p className="text-3xl font-mono font-bold text-emerald-400">${dailyLaborCost.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>
+                                <p className="text-xs text-slate-400 mt-1">Costo Diario Estimado (Jornada {formData.workdayHours}hs)</p>
+                            </div>
+
+                            <div className="space-y-3 text-sm border-t border-slate-700 pt-4">
+                                <div className="flex justify-between">
+                                    <span className="text-slate-400">Jornales (Indiv.)</span>
+                                    <span className="font-bold">{laborForce.reduce((acc, curr) => acc + curr.count, 0)} operarios</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-slate-400">Cuadrillas</span>
+                                    <span className="font-bold">{assignedCrews.reduce((acc, curr) => acc + curr.count, 0)} equipos</span>
+                                </div>
+                            </div>
+
+                            <div className="mt-6 p-3 bg-slate-700 rounded-lg text-xs text-slate-300 leading-relaxed">
+                                <p>Este plantel estará disponible para ser asignado en el módulo de Planificación para cálculos de rendimiento real.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
         </div>
-
-        <div className="mt-10 pt-6 border-t border-slate-100 flex justify-end">
-          <button
-            onClick={handleSave}
-            className="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-black transition-all shadow-lg shadow-slate-200 flex items-center gap-2 transform active:scale-95"
-          >
-            <Save size={20} /> Guardar Configuración
-          </button>
-        </div>
-      </div>
     </div>
   );
 };

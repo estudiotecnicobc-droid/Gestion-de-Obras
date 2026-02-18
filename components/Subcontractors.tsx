@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useERP } from '../context/ERPContext';
+import { calculateUnitPrice } from '../services/calculationService';
 import { 
   Users, UserPlus, FileSignature, ShieldCheck, BadgeAlert, Plus, Calendar, 
   DollarSign, ArrowRight, CheckCircle2, AlertTriangle, FileText, Check, Save,
@@ -8,7 +9,13 @@ import {
 import { Subcontractor, Contract, Certification, ContractItem } from '../types';
 
 export const Subcontractors: React.FC = () => {
-  const { subcontractors, contracts, certifications, project, tasks, addSubcontractor, updateSubcontractor, addContract, addCertification } = useERP();
+  const { 
+      subcontractors, contracts, certifications, project, tasks, 
+      addSubcontractor, updateSubcontractor, addContract, addCertification,
+      // Indexes required for price calculation
+      yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, 
+      taskCrewYieldsIndex, crewsMap, laborCategoriesMap 
+  } = useERP();
   
   const [activeView, setActiveView] = useState<'list' | 'contracts' | 'certify'>('list');
   
@@ -80,12 +87,28 @@ export const Subcontractors: React.FC = () => {
       newContract.selectedItems.forEach(bid => {
           const bItem = project.items.find(i => i.id === bid);
           if (bItem) {
-              // Default agreed price = Task Price (simplification)
-              // In real app, user inputs this price.
+              const task = tasks.find(t => t.id === bItem.taskId);
+              let unitPrice = 0;
+              
+              // Calculate Full Unit Price (Mat + Labor + Tool + Fixed)
+              if (task) {
+                  const analysis = calculateUnitPrice(
+                      task,
+                      yieldsIndex,
+                      materialsMap,
+                      toolYieldsIndex,
+                      toolsMap,
+                      taskCrewYieldsIndex,
+                      crewsMap,
+                      laborCategoriesMap
+                  );
+                  unitPrice = analysis.totalUnitCost;
+              }
+
               contractItems.push({
                   budgetItemId: bid,
                   taskId: bItem.taskId,
-                  agreedUnitPrice: 100 // Mock value, should be calculated from task cost
+                  agreedUnitPrice: unitPrice // Uses the calculated budget price
               });
           }
       });
@@ -272,6 +295,8 @@ export const Subcontractors: React.FC = () => {
                           <div className="max-h-60 overflow-y-auto border rounded p-2 bg-slate-50">
                               {project.items.map(item => {
                                   const t = tasks.find(tsk => tsk.id === item.taskId);
+                                  const analysis = t ? calculateUnitPrice(t, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap) : { totalUnitCost: 0 };
+                                  
                                   return (
                                       <div key={item.id} className="flex items-center gap-2 py-1 border-b border-slate-200 last:border-0">
                                           <input 
@@ -283,8 +308,15 @@ export const Subcontractors: React.FC = () => {
                                                 setNewContract({...newContract, selectedItems: newSet});
                                             }}
                                           />
-                                          <span className="text-sm font-medium text-slate-700">{t?.name}</span>
-                                          <span className="text-xs text-slate-400 ml-auto">{item.quantity} {t?.unit}</span>
+                                          <div className="flex-1 flex justify-between items-center pr-2">
+                                              <span className="text-sm font-medium text-slate-700">{t?.name}</span>
+                                              <div className="text-right">
+                                                  <span className="text-xs text-slate-400 mr-2">{item.quantity} {t?.unit}</span>
+                                                  <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
+                                                      ${analysis.totalUnitCost.toFixed(2)}
+                                                  </span>
+                                              </div>
+                                          </div>
                                       </div>
                                   )
                               })}
@@ -429,7 +461,7 @@ export const Subcontractors: React.FC = () => {
                                                       <tr key={ci.budgetItemId} className="hover:bg-slate-50">
                                                           <td className="py-3 font-medium text-slate-700">{t?.name}</td>
                                                           <td className="py-3 text-right text-slate-500">{bItem?.quantity} {t?.unit}</td>
-                                                          <td className="py-3 text-right font-mono">${ci.agreedUnitPrice}</td>
+                                                          <td className="py-3 text-right font-mono">${ci.agreedUnitPrice.toFixed(2)}</td>
                                                           <td className="py-3 text-right">
                                                               <div className="flex items-center justify-end gap-1">
                                                                   <input 

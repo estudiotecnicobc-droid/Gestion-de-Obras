@@ -1,4 +1,4 @@
-import React, { useMemo, useState, Fragment } from 'react';
+import React, { useMemo, useState, Fragment, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
 import { calculateUnitPrice } from '../services/calculationService';
 import { 
@@ -12,7 +12,7 @@ import {
 import { 
   ChevronRight, ChevronDown, Package, Hammer, Wrench, 
   Save, Camera, History, ArrowUpRight, ArrowDownRight,
-  TrendingUp, CircleDollarSign, Table as TableIcon
+  TrendingUp, CircleDollarSign, Table as TableIcon, Printer, X, ZoomIn, ZoomOut
 } from 'lucide-react';
 
 // --- Helper Types for the Grid ---
@@ -37,10 +37,15 @@ export const BudgetGrid: React.FC = () => {
     updateBudgetItem, addTaskYield, updateMaterial, snapshots, createSnapshot,
     addTaskToolYield, updateTool, updateTask,
     // Indexes
-    yieldsIndex, materialsMap, toolYieldsIndex, toolsMap
+    yieldsIndex, materialsMap, toolYieldsIndex, toolsMap,
+    laborCategoriesMap, taskCrewYieldsIndex, crewsMap
   } = useERP();
 
   const [expanded, setExpanded] = useState({});
+  
+  // PDF Preview State
+  const [showPdfPreview, setShowPdfPreview] = useState(false);
+  const [printScale, setPrintScale] = useState(1);
 
   // 1. Data Transformation: Flat List -> Hierarchical (Rubro -> Task)
   const data = useMemo(() => {
@@ -54,7 +59,7 @@ export const BudgetGrid: React.FC = () => {
       const task = tasks.find(t => t.id === item.taskId);
       if (!task) return;
 
-      const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap);
+      const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
       const category = task.category && rubros.includes(task.category) ? task.category : 'Sin Categoría';
       
       const gridRow: GridRow = {
@@ -92,7 +97,7 @@ export const BudgetGrid: React.FC = () => {
     });
 
     return result;
-  }, [project.items, tasks, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, rubros]);
+  }, [project.items, tasks, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, rubros, taskCrewYieldsIndex, crewsMap, laborCategoriesMap]);
 
   // 2. Total Project Cost Calculation
   const totalProjectCost = useMemo(() => 
@@ -124,7 +129,7 @@ export const BudgetGrid: React.FC = () => {
             </span>
             {!isRubro && row.original.type === 'task' && (
                 <span className="text-[10px] bg-slate-100 text-slate-400 px-1.5 rounded border border-slate-200">
-                    {row.original.originalItem.taskData.id.substring(0,6)}
+                    {row.original.originalItem.taskData.code || row.original.originalItem.taskData.id.substring(0,4)}
                 </span>
             )}
           </div>
@@ -362,6 +367,18 @@ export const BudgetGrid: React.FC = () => {
   return (
     <div className="space-y-6">
       
+      {/* CSS Injection for PDF Print */}
+      <style>{`
+        @media print {
+          @page { margin: 0.5cm; size: A4 landscape; }
+          body > *:not(#pdf-portal) { display: none !important; }
+          #pdf-portal { display: block !important; position: absolute; top: 0; left: 0; width: 100%; z-index: 9999; }
+          #pdf-content { width: 100% !important; transform: none !important; box-shadow: none !important; border: none !important; margin: 0 !important; padding: 0 !important; }
+          .no-print { display: none !important; }
+          .print-break-inside-avoid { break-inside: avoid; }
+        }
+      `}</style>
+
       {/* Header Panel */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
          <div>
@@ -372,21 +389,23 @@ export const BudgetGrid: React.FC = () => {
          </div>
          
          {/* KPI & Actions */}
-         <div className="flex items-center gap-4 bg-slate-50 p-2 rounded-lg border border-slate-200">
-             <div className="px-4 border-r border-slate-200">
-                 <p className="text-[10px] uppercase font-bold text-slate-400">Total Presupuesto</p>
-                 <p className="text-xl font-mono font-bold text-slate-800">${totalProjectCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
-             </div>
-             
-             {lastSnapshot && (
+         <div className="flex items-center gap-2">
+             <div className="flex items-center gap-4 bg-slate-50 p-2 rounded-lg border border-slate-200 mr-2">
                  <div className="px-4 border-r border-slate-200">
-                    <p className="text-[10px] uppercase font-bold text-slate-400 flex items-center gap-1">Vs. {lastSnapshot.name}</p>
-                    <div className={`flex items-center gap-1 font-bold font-mono text-sm ${deviation > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                        {deviation > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                        ${Math.abs(deviation).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                    </div>
+                     <p className="text-[10px] uppercase font-bold text-slate-400">Total Presupuesto</p>
+                     <p className="text-xl font-mono font-bold text-slate-800">${totalProjectCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
                  </div>
-             )}
+                 
+                 {lastSnapshot && (
+                     <div className="px-4">
+                        <p className="text-[10px] uppercase font-bold text-slate-400 flex items-center gap-1">Vs. {lastSnapshot.name}</p>
+                        <div className={`flex items-center gap-1 font-bold font-mono text-sm ${deviation > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                            {deviation > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                            ${Math.abs(deviation).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </div>
+                     </div>
+                 )}
+             </div>
 
              <button 
                 onClick={handleSnapshot}
@@ -394,6 +413,14 @@ export const BudgetGrid: React.FC = () => {
                 title="Guardar estado actual como Línea Base"
              >
                  <Camera size={16} /> Snapshot
+             </button>
+             
+             <button 
+                onClick={() => setShowPdfPreview(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg text-sm font-bold transition-all shadow-md"
+                title="Exportar PDF Detallado"
+             >
+                 <Printer size={16} /> Exportar PDF
              </button>
          </div>
       </div>
@@ -459,6 +486,209 @@ export const BudgetGrid: React.FC = () => {
                          <div className="font-mono font-bold text-slate-600">${snap.totalCost.toLocaleString()}</div>
                      </div>
                  ))}
+             </div>
+          </div>
+      )}
+
+      {/* --- PDF PREVIEW MODAL --- */}
+      {showPdfPreview && (
+          <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex flex-col animate-in fade-in duration-200">
+             
+             {/* Toolbar */}
+             <div className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 flex-shrink-0">
+                <div className="flex items-center gap-4">
+                   <h3 className="font-bold text-slate-800 flex items-center gap-2"><Printer size={20} className="text-red-600" /> Exportar Presupuesto</h3>
+                   <div className="h-6 w-px bg-slate-200 mx-2"></div>
+                   
+                   <div className="flex bg-slate-100 rounded-lg p-1 gap-1">
+                      <button onClick={() => setPrintScale(s => Math.max(0.5, s - 0.1))} className="p-1.5 hover:bg-white rounded shadow-sm text-slate-600"><ZoomOut size={16}/></button>
+                      <span className="text-xs font-mono font-bold w-12 flex items-center justify-center text-slate-500">{Math.round(printScale * 100)}%</span>
+                      <button onClick={() => setPrintScale(s => Math.min(2, s + 0.1))} className="p-1.5 hover:bg-white rounded shadow-sm text-slate-600"><ZoomIn size={16}/></button>
+                   </div>
+                </div>
+
+                <div className="flex items-center gap-4">
+                    <button 
+                       onClick={() => window.print()}
+                       className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-lg font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all"
+                    >
+                       <Printer size={18} /> Imprimir / Guardar PDF
+                    </button>
+                    <button onClick={() => setShowPdfPreview(false)} className="p-2 hover:bg-slate-100 rounded-full text-slate-500"><X size={24}/></button>
+                </div>
+             </div>
+
+             {/* Preview Area (Simulating the PDF Layout) */}
+             <div className="flex-1 overflow-auto bg-slate-500/10 p-8 flex justify-center items-start">
+                <div 
+                   id="pdf-portal"
+                   className="bg-white shadow-2xl transition-transform origin-top duration-200"
+                   style={{ 
+                      width: '297mm', // A4 Landscape
+                      minHeight: '210mm', 
+                      padding: '10mm',
+                      transform: `scale(${printScale})`
+                   }}
+                >
+                    <div id="pdf-content" className="font-sans text-slate-900 text-xs">
+                        
+                        {/* Title */}
+                        <div className="mb-4 border-b-2 border-black pb-2 flex justify-between items-end">
+                            <div>
+                                <h1 className="text-2xl font-black uppercase tracking-tight">Presupuesto de Obra</h1>
+                                <p className="font-bold text-sm uppercase">{project.name}</p>
+                            </div>
+                            <div className="text-right">
+                                <p>Fecha: {new Date().toLocaleDateString()}</p>
+                                <p className="text-[10px]">{project.companyName}</p>
+                            </div>
+                        </div>
+
+                        {/* TABLE STRUCTURE MATCHING THE PDF IMAGE */}
+                        <table className="w-full border-collapse border border-black text-[10px]">
+                            <thead>
+                                <tr className="bg-gray-100 text-center font-bold">
+                                    <th className="border border-black p-1 w-10">Rubro</th>
+                                    <th className="border border-black p-1 w-10">Item</th>
+                                    <th className="border border-black p-1 text-left">Descripción</th>
+                                    <th className="border border-black p-1 w-8">Und</th>
+                                    <th className="border border-black p-1 w-12">Cant.</th>
+                                    
+                                    {/* Materiales Header */}
+                                    <th className="border border-black p-1 w-20">
+                                        Precio<br/>Unitario
+                                    </th>
+                                    <th className="border border-black p-1 w-24">
+                                        Precio<br/>Item
+                                    </th>
+                                    
+                                    {/* Mano de Obra Header */}
+                                    <th className="border border-black p-1 w-20">
+                                        Mano de Obra<br/>Unitario
+                                    </th>
+                                    <th className="border border-black p-1 w-24">
+                                        Mano de Obra<br/>Item
+                                    </th>
+                                    
+                                    <th className="border border-black p-1 w-24">TOTAL</th>
+                                    <th className="border border-black p-1 w-8">%</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {(() => {
+                                    // Logic to render rows similar to the PDF logic
+                                    const rows = [];
+                                    
+                                    // Iterate groups from data logic (reusing useMemo logic but flat)
+                                    let globalTotal = 0;
+                                    let globalLabor = 0;
+                                    let globalMat = 0;
+
+                                    data.forEach((group) => {
+                                        if (group.type === 'rubro') {
+                                            // Render Header Row
+                                            rows.push(
+                                                <tr key={group.id} className="bg-gray-50 break-inside-avoid">
+                                                    <td className="border border-black p-1 font-bold" colSpan={11}>
+                                                        {group.name}
+                                                    </td>
+                                                </tr>
+                                            );
+
+                                            // Render Children
+                                            if (group.subRows) {
+                                                group.subRows.forEach((item, idx) => {
+                                                    const taskData = item.originalItem.taskData;
+                                                    const analysis = calculateUnitPrice(taskData, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+                                                    
+                                                    const laborUnit = analysis.laborCost;
+                                                    const nonLaborUnit = analysis.materialCost + analysis.toolCost + analysis.fixedCost;
+                                                    
+                                                    const laborTotal = laborUnit * item.quantity;
+                                                    const nonLaborTotal = nonLaborUnit * item.quantity;
+                                                    const itemTotal = laborTotal + nonLaborTotal;
+
+                                                    globalTotal += itemTotal;
+                                                    globalLabor += laborTotal;
+                                                    globalMat += nonLaborTotal;
+
+                                                    // Calculate % (of rubro or total? usually of total project or rubro. Let's use % of Project Total if available, or just placeholder)
+                                                    const percent = totalProjectCost > 0 ? (itemTotal / totalProjectCost) * 100 : 0;
+
+                                                    rows.push(
+                                                        <tr key={item.id} className="break-inside-avoid">
+                                                            <td className="border border-black p-1 text-center"></td>
+                                                            <td className="border border-black p-1 text-center font-mono text-[9px]">
+                                                                {taskData.code || idx + 1}
+                                                            </td>
+                                                            <td className="border border-black p-1">{item.name}</td>
+                                                            <td className="border border-black p-1 text-center">{item.unit}</td>
+                                                            <td className="border border-black p-1 text-right">{item.quantity}</td>
+                                                            
+                                                            {/* Mat/Eq */}
+                                                            <td className="border border-black p-1 text-right">{nonLaborUnit.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                            <td className="border border-black p-1 text-right">{nonLaborTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                            
+                                                            {/* Labor */}
+                                                            <td className="border border-black p-1 text-right">{laborUnit.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                            <td className="border border-black p-1 text-right">{laborTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                            
+                                                            <td className="border border-black p-1 text-right font-bold">{itemTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                            <td className="border border-black p-1 text-right text-[9px]">{percent.toFixed(2)}</td>
+                                                        </tr>
+                                                    );
+                                                });
+                                                
+                                                // Rubro Subtotal
+                                                rows.push(
+                                                    <tr key={`${group.id}_subtotal`} className="bg-gray-100 font-bold break-inside-avoid">
+                                                        <td className="border border-black p-1 text-right" colSpan={5}>Subtotal {group.name}</td>
+                                                        <td className="border border-black p-1 bg-gray-200"></td>
+                                                        <td className="border border-black p-1 text-right">
+                                                            {group.subRows.reduce((acc, r) => {
+                                                                const t = r.originalItem.taskData;
+                                                                const a = calculateUnitPrice(t, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+                                                                return acc + ((a.materialCost + a.toolCost + a.fixedCost) * r.quantity);
+                                                            }, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                                        </td>
+                                                        <td className="border border-black p-1 bg-gray-200"></td>
+                                                        <td className="border border-black p-1 text-right">
+                                                            {group.subRows.reduce((acc, r) => {
+                                                                const t = r.originalItem.taskData;
+                                                                const a = calculateUnitPrice(t, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+                                                                return acc + (a.laborCost * r.quantity);
+                                                            }, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                                        </td>
+                                                        <td className="border border-black p-1 text-right">{group.totalPrice.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                                        <td className="border border-black p-1"></td>
+                                                    </tr>
+                                                )
+                                            }
+                                        }
+                                    });
+
+                                    // Grand Total Row
+                                    rows.push(
+                                        <tr key="GRAND_TOTAL" className="bg-slate-800 text-white font-bold text-xs break-inside-avoid">
+                                            <td className="border border-black p-2 text-right uppercase" colSpan={6}>Totales Generales</td>
+                                            <td className="border border-black p-2 text-right">{globalMat.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                            <td className="border border-black p-2 text-right"></td>
+                                            <td className="border border-black p-2 text-right">{globalLabor.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                            <td className="border border-black p-2 text-right">{globalTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                            <td className="border border-black p-2">100%</td>
+                                        </tr>
+                                    );
+
+                                    return rows;
+                                })()}
+                            </tbody>
+                        </table>
+
+                        <div className="mt-4 text-[10px] text-gray-500">
+                            * Valores expresados en {project.currency}. Precios incluyen Costos Directos e Indirectos prorrateados en los precios unitarios si aplica.
+                        </div>
+                    </div>
+                </div>
              </div>
           </div>
       )}

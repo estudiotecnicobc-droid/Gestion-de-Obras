@@ -6,7 +6,7 @@ import {
   DollarSign, Hammer, Package, Clock, Wrench, FileText, 
   Download, ShoppingCart, ChevronRight, Printer, FileSpreadsheet,
   ZoomIn, ZoomOut, Image as ImageIcon, X, Move, Eye, CheckSquare, Square,
-  BarChart2, TrendingUp, FileCheck, FolderPlus
+  BarChart2, TrendingUp, FileCheck, FolderPlus, PieChart as PieChartIcon
 } from 'lucide-react';
 import { ProjectWizard } from './ProjectWizard';
 
@@ -27,10 +27,6 @@ export const Dashboard: React.FC = () => {
       }
   }, [project]);
 
-  // Handle triggered wizard from Layout (via props or context? For now local button or context trigger if we added one. 
-  // We'll stick to a local button here and the Layout one can toggle a global state if we refactor, 
-  // but for now let's add a "Change Project" button in the dashboard header too).
-
   // --- Detail Modal State ---
   const [detailModalType, setDetailModalType] = useState<'material' | 'labor' | 'tool' | null>(null);
 
@@ -49,6 +45,7 @@ export const Dashboard: React.FC = () => {
     let totalMaterialCost = 0;
     let totalLaborCost = 0;
     let totalToolCost = 0;
+    let totalFixedCost = 0; // Subcontrato
     let totalDurationDays = 0;
 
     project.items.forEach(item => {
@@ -60,16 +57,30 @@ export const Dashboard: React.FC = () => {
         totalMaterialCost += unitAnalysis.materialCost * item.quantity;
         totalLaborCost += unitAnalysis.laborCost * item.quantity;
         totalToolCost += unitAnalysis.toolCost * item.quantity;
+        totalFixedCost += unitAnalysis.fixedCost * item.quantity; // Sumar costos fijos (subcontrato)
         
         const duration = item.manualDuration || (task.dailyYield > 0 ? (item.quantity / task.dailyYield) : 1);
         totalDurationDays += duration;
       }
     });
 
-    return { totalCost, totalMaterialCost, totalLaborCost, totalToolCost, totalDurationDays };
+    // Calculate Indirect Cost based on Project Settings
+    const indirectCost = totalCost * (project.pricing ? project.pricing.generalExpensesPercent / 100 : 0.15);
+    const totalCostWithIndirects = totalCost + indirectCost;
+
+    return { 
+        totalCost, // Direct Cost Total
+        totalCostWithIndirects,
+        totalMaterialCost, 
+        totalLaborCost, 
+        totalToolCost, 
+        totalFixedCost, // Subcontract
+        indirectCost,
+        totalDurationDays 
+    };
   }, [project, tasks, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap]);
 
-  // --- REPORT S-CURVE CALCULATION (Duplicated logic for standalone report) ---
+  // --- REPORT S-CURVE CALCULATION ---
   const sCurveData = useMemo(() => {
     const startDate = new Date(project.startDate);
     let maxDuration = 0;
@@ -266,10 +277,13 @@ export const Dashboard: React.FC = () => {
     });
   }, [project, tasks, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap]);
 
+  // Updated to include 5 Families
   const costData = [
-    { name: 'Materiales', value: stats.totalMaterialCost },
-    { name: 'Mano de Obra', value: stats.totalLaborCost },
-    { name: 'Equipos', value: stats.totalToolCost },
+    { name: 'MATERIAL', value: stats.totalMaterialCost },
+    { name: 'MANO DE OBRA', value: stats.totalLaborCost },
+    { name: 'EQUIPOS', value: stats.totalToolCost },
+    { name: 'SUBCONTRATO', value: stats.totalFixedCost },
+    { name: 'COSTO INDIRECTO', value: stats.indirectCost },
   ];
 
   const exportCSV = (data: any[], filename: string) => {
@@ -335,7 +349,7 @@ export const Dashboard: React.FC = () => {
             <div className="flex items-center gap-2 mt-1">
                 <span className="text-sm text-slate-500">Cliente: {project.client}</span>
                 <span className="w-1 h-1 rounded-full bg-slate-300"></span>
-                <span className="text-sm font-bold text-blue-600">Total: ${stats.totalCost.toLocaleString()}</span>
+                <span className="text-sm font-bold text-blue-600">Total: ${stats.totalCostWithIndirects.toLocaleString()}</span>
             </div>
         </div>
         <div className="flex items-center gap-2">
@@ -407,15 +421,15 @@ export const Dashboard: React.FC = () => {
             <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
                 <div className="p-3 bg-amber-50 text-amber-600 rounded-full"><ShoppingCart size={20} /></div>
                 <div>
-                    <p className="text-[10px] text-slate-500 uppercase font-bold">Items</p>
-                    <p className="text-lg font-bold">{project.items.length}</p>
+                    <p className="text-[10px] text-slate-500 uppercase font-bold">Subcontrato</p>
+                    <p className="text-lg font-bold">${stats.totalFixedCost.toLocaleString()}</p>
                 </div>
             </div>
             <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
                 <div className="p-3 bg-slate-100 text-slate-600 rounded-full"><Clock size={20} /></div>
                 <div>
-                    <p className="text-[10px] text-slate-500 uppercase font-bold">Plazo Est.</p>
-                    <p className="text-lg font-bold">{Math.ceil(stats.totalDurationDays)} días</p>
+                    <p className="text-[10px] text-slate-500 uppercase font-bold">C. Indirecto</p>
+                    <p className="text-lg font-bold">${stats.indirectCost.toLocaleString()}</p>
                 </div>
             </div>
           </div>
@@ -424,7 +438,7 @@ export const Dashboard: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
                 <h3 className="text-sm font-bold mb-6 text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                    <PieChart size={16} /> Distribución por Insumo
+                    <PieChartIcon size={16} /> Distribución por Familia
                 </h3>
                 <div className="h-64">
                     <ResponsiveContainer width="100%" height="100%">
@@ -443,7 +457,7 @@ export const Dashboard: React.FC = () => {
                                 ))}
                             </Pie>
                             <Tooltip formatter={(value: number) => `$${value.toLocaleString()}`} />
-                            <Legend />
+                            <Legend layout="vertical" align="right" verticalAlign="middle" />
                         </PieChart>
                     </ResponsiveContainer>
                 </div>

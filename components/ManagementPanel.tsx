@@ -2,12 +2,12 @@ import React, { useMemo, useState, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
 import { calculateUnitPrice, addDays, calculateDuration } from '../services/calculationService';
 import { 
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Line, ComposedChart, ReferenceLine, ScatterChart, Scatter, ZAxis
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Line, ComposedChart, ReferenceLine, ScatterChart, Scatter, ZAxis, Bar
 } from 'recharts';
 import { 
   TrendingUp, AlertTriangle, FileCheck, DollarSign, Calendar, 
   Printer, X, ZoomIn, ZoomOut, Image as ImageIcon, Briefcase, FileText,
-  Activity, Target, Calculator, Clock, Zap, FastForward, Info, Users
+  Activity, Target, Calculator, Clock, Zap, FastForward, Info, Users, Layers
 } from 'lucide-react';
 
 export const ManagementPanel: React.FC = () => {
@@ -162,6 +162,76 @@ export const ManagementPanel: React.FC = () => {
     }
     return points;
   }, [project, tasks, evmStats]);
+
+  // --- ABC (PARETO) ANALYSIS ---
+  const abcAnalysis = useMemo(() => {
+      // 1. Calculate individual total costs
+      const rawItems = project.items.map(item => {
+          const task = tasks.find(t => t.id === item.taskId);
+          if (!task) return null;
+          const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap);
+          const totalCost = analysis.totalUnitCost * item.quantity;
+          return {
+              id: item.id,
+              name: task.name,
+              category: task.category,
+              cost: totalCost,
+              quantity: item.quantity,
+              unit: task.unit
+          };
+      }).filter(Boolean) as any[];
+
+      // 2. Sort descending by Cost
+      rawItems.sort((a, b) => b.cost - a.cost);
+
+      // 3. Calculate accumulated %
+      const totalProjectCost = rawItems.reduce((acc, curr) => acc + curr.cost, 0);
+      let accumulated = 0;
+      
+      const analyzedItems = rawItems.map(item => {
+          accumulated += item.cost;
+          const percentage = totalProjectCost > 0 ? (item.cost / totalProjectCost) * 100 : 0;
+          const cumulativePercentage = totalProjectCost > 0 ? (accumulated / totalProjectCost) * 100 : 0;
+          
+          let abcCategory = 'C';
+          if (cumulativePercentage <= 80) abcCategory = 'A';
+          else if (cumulativePercentage <= 95) abcCategory = 'B';
+
+          return {
+              ...item,
+              percentage,
+              cumulativePercentage,
+              abcCategory
+          };
+      });
+
+      // 4. Stats Grouping
+      const stats = {
+          A: { count: 0, cost: 0, percentage: 0 },
+          B: { count: 0, cost: 0, percentage: 0 },
+          C: { count: 0, cost: 0, percentage: 0 },
+      };
+
+      analyzedItems.forEach(item => {
+          const cat = item.abcCategory as 'A' | 'B' | 'C';
+          stats[cat].count++;
+          stats[cat].cost += item.cost;
+      });
+
+      // Calculate percentages of items
+      const totalCount = analyzedItems.length;
+      if (totalCount > 0) {
+          stats.A.percentage = (stats.A.count / totalCount) * 100;
+          stats.B.percentage = (stats.B.count / totalCount) * 100;
+          stats.C.percentage = (stats.C.count / totalCount) * 100;
+      }
+
+      return {
+          items: analyzedItems,
+          chartData: analyzedItems.slice(0, 20), // Show top 20 in chart
+          stats
+      };
+  }, [project.items, tasks, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap]);
 
   // --- 3. Critical Deviations Logic ---
   const deviations = useMemo(() => {
@@ -531,6 +601,78 @@ export const ManagementPanel: React.FC = () => {
                          </tbody>
                      </table>
                  )}
+              </div>
+          </div>
+      </div>
+
+      {/* --- ABC CURVE ANALYSIS (NEW) --- */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+          <div className="flex justify-between items-center mb-6">
+              <h3 className="font-bold text-slate-700 flex items-center gap-2">
+                  <Layers size={20} className="text-purple-600" /> Análisis de Pareto (Curva ABC)
+              </h3>
+              <div className="flex gap-4">
+                  <div className="bg-red-50 border border-red-100 px-3 py-1 rounded text-xs text-red-700 font-bold">
+                      A: 80% Costo ({abcAnalysis.stats.A.count} ítems)
+                  </div>
+                  <div className="bg-blue-50 border border-blue-100 px-3 py-1 rounded text-xs text-blue-700 font-bold">
+                      B: 15% Costo ({abcAnalysis.stats.B.count} ítems)
+                  </div>
+                  <div className="bg-green-50 border border-green-100 px-3 py-1 rounded text-xs text-green-700 font-bold">
+                      C: 5% Costo ({abcAnalysis.stats.C.count} ítems)
+                  </div>
+              </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              {/* ABC Chart */}
+              <div className="lg:col-span-2 h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={abcAnalysis.chartData} margin={{ top: 0, right: 0, left: 20, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                          <XAxis 
+                              dataKey="name" 
+                              fontSize={10} 
+                              tickFormatter={(val) => val.length > 10 ? `${val.substring(0, 10)}...` : val} 
+                              interval={0}
+                          />
+                          <YAxis yAxisId="left" fontSize={10} tickFormatter={(v) => `$${v/1000}k`} />
+                          <YAxis yAxisId="right" orientation="right" fontSize={10} unit="%" domain={[0, 100]} />
+                          <Tooltip 
+                              formatter={(value: any, name: string) => name === 'cumulativePercentage' ? `${Number(value).toFixed(1)}%` : `$${Number(value).toLocaleString()}`}
+                              labelStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                          />
+                          <Bar yAxisId="left" dataKey="cost" name="Costo Total" fill="#8884d8" barSize={20} radius={[4,4,0,0]} />
+                          <Line yAxisId="right" type="monotone" dataKey="cumulativePercentage" name="% Acumulado" stroke="#ff7300" strokeWidth={2} dot={false} />
+                      </ComposedChart>
+                  </ResponsiveContainer>
+              </div>
+
+              {/* ABC Table (Category A) */}
+              <div className="border border-slate-200 rounded-lg overflow-hidden flex flex-col">
+                  <div className="bg-slate-50 p-2 text-xs font-bold text-slate-500 uppercase border-b border-slate-200">
+                      Ítems Críticos (Categoría A)
+                  </div>
+                  <div className="flex-1 overflow-auto max-h-60">
+                      <table className="w-full text-left text-xs">
+                          <thead className="bg-white text-slate-400 sticky top-0">
+                              <tr>
+                                  <th className="p-2">Ítem</th>
+                                  <th className="p-2 text-right">Monto</th>
+                                  <th className="p-2 text-right">%</th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                              {abcAnalysis.items.filter(i => i.abcCategory === 'A').map((item: any) => (
+                                  <tr key={item.id} className="hover:bg-slate-50">
+                                      <td className="p-2 truncate max-w-[120px]" title={item.name}>{item.name}</td>
+                                      <td className="p-2 text-right font-mono">${item.cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                      <td className="p-2 text-right font-bold text-purple-600">{item.percentage.toFixed(1)}%</td>
+                                  </tr>
+                              ))}
+                          </tbody>
+                      </table>
+                  </div>
               </div>
           </div>
       </div>

@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { LayoutDashboard, Calculator, CalendarDays, Settings, HardHat, Wrench, SlidersHorizontal, Table, Truck, TrendingUp, Users, LogOut, Ruler, FileText, ClipboardCheck, Save, CheckCircle2, ArrowLeftRight, Building } from 'lucide-react';
+import { LayoutDashboard, Calculator, CalendarDays, Settings, HardHat, Wrench, SlidersHorizontal, Table, Truck, TrendingUp, Users, LogOut, Ruler, FileText, ClipboardCheck, Save, CheckCircle2, ArrowLeftRight, Building, PenTool } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Role } from '../types';
 import { useERP } from '../context/ERPContext';
@@ -30,6 +31,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
     { id: 'measurements', label: 'Cómputos (Mediciones)', icon: Ruler, roles: ['admin', 'engineering'] }, 
     { id: 'subcontractors', label: 'Subcontratistas', icon: Users, roles: ['admin', 'engineering'] },
     { id: 'budget', label: 'Presupuesto', icon: Calculator, roles: ['admin', 'engineering'] },
+    { id: 'apu', label: 'Analizador APU', icon: PenTool, roles: ['admin', 'engineering'] },
     { id: 'grid', label: 'Grilla de Costos', icon: Table, roles: ['admin', 'engineering'] },
     { id: 'planning', label: 'Planificación', icon: CalendarDays, roles: ['admin', 'engineering', 'foreman'] },
     { id: 'reception', label: 'Recepción (Remitos)', icon: Truck, roles: ['admin', 'foreman'] },

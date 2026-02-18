@@ -1,6 +1,10 @@
+
 // Definición de las entidades base del sistema
 
 export type Role = 'admin' | 'engineering' | 'foreman' | 'client';
+
+// NEW: Cost Families based on User Request
+export type CostFamily = 'MATERIAL' | 'MANO DE OBRA' | 'EQUIPOS' | 'SUBCONTRATO' | 'COSTO INDIRECTO';
 
 export interface User {
   id: string;
@@ -32,6 +36,12 @@ export interface Material {
   category?: string; 
   minStock?: number; 
   provider?: string;
+  family?: CostFamily; // Optional override, defaults to MATERIAL
+  
+  // NEW: Extended Fields
+  description?: string;
+  commercialFormat?: string; // e.g. "Bolsa 50kg", "Barra 12m"
+  wastePercent?: number; // Standard waste percentage
 }
 
 export interface Tool {
@@ -40,6 +50,7 @@ export interface Tool {
   name: string;
   category: string; 
   costPerHour: number; 
+  family?: CostFamily; // Optional override, defaults to EQUIPOS
 }
 
 export interface LaborCategory {
@@ -47,9 +58,10 @@ export interface LaborCategory {
   organizationId: string; // Multitenant
   role: string; // Nombre del rol (ej: Oficial Especializado)
   basicHourlyRate: number; // Valor hora de bolsillo/básico
-  socialChargesPercent: number; // % Cargas Sociales y Aportes Patronales
+  socialChargesPercent: number; // % Cargas Sociales, Fondo Desempleo, Presentismo
   insurancePercent: number; // % Seguros y otros
   description?: string;
+  family?: CostFamily; // Optional override, defaults to MANO DE OBRA
 }
 
 // --- CREW (CUADRILLAS) ---
@@ -67,23 +79,49 @@ export interface Crew {
   composition: CrewComposition[]; // Lista de integrantes
 }
 
+// --- STANDARD YIELDS SCHEMA (CHANDÍAS BASELINE) ---
+export interface StandardYields {
+    materials?: { materialId: string; quantity: number; wastePercent: number }[];
+    labor?: { laborCategoryId: string; hhPerUnit: number }[]; // HH por unidad
+    equipment?: { toolId: string; hoursPerUnit: number }[];
+}
+
 export interface Task {
   id: string;
   organizationId: string; // Multitenant
   name: string; 
+  description?: string; // NEW: Extended description
   unit: string; 
   laborCost: number; // Costo Manual (Legacy o Alternativo)
-  dailyYield: number;
+  dailyYield: number; // Rendimiento Diario Standard (u/dia)
   category?: string;
+  
   // NEW: Costos fijos por unidad (Fletes, Ayuda Gremio, Subcontrato específico)
   fixedCost?: number; 
-  fixedCostDescription?: string; 
+  fixedCostDescription?: string;
+  
+  // NEW: Excel Import Fields
+  code?: string; // Código de Tarea (Columna 0 del Excel)
+  specifications?: string; // Especificación Técnica (Columna 6 del Excel)
+
+  // NEW: Engineering Standard (Coscarella / Chandías)
+  yieldHH?: number; // Rendimiento en Horas Hombre por Unidad (hh/u)
+  defaultPredecessorId?: string; // Sugerencia de secuencia lógica (precedenciaId)
+
+  // NEW: Baseline for Comparison (The "Standard" vs the "Real" in Context)
+  standardYields?: StandardYields; 
+
+  // NEW: Virtual properties for Sync (Pass-through objects)
+  materialsYield?: TaskYield[];
+  equipmentYield?: TaskToolYield[];
+  laborYield?: TaskCrewYield[]; 
 }
 
 export interface TaskYield {
   taskId: string;
   materialId: string;
-  quantity: number;
+  quantity: number; // Cantidad Neta
+  wastePercent?: number; // Desperdicio Real Adicional
 }
 
 export interface TaskToolYield {
@@ -102,15 +140,20 @@ export interface BudgetItem {
   id: string;
   taskId: string;
   quantity: number; 
-  startDate?: string; // Fecha de inicio específica
+  startDate?: string; // Fecha de inicio PLANIFICADA
   manualDuration?: number; // Duración forzada por el usuario
   dependencies?: Dependency[]; // Vinculaciones
   progress?: number; // Porcentaje de avance (0-100)
   
   // NEW: Planning specific overrides based on Methods & Time Study
-  crewsAssigned?: number; // Frentes de ataque
+  crewsAssigned?: number; // Frentes de ataque (Cant_Personal en fórmula Coscarella)
   efficiencyFactor?: number; // Valoración del Ritmo (fv). 1.0 = Normal (100%), 1.2 = Rápido, 0.8 = Lento
   allowancePercent?: number; // Suplementos (Fatiga, Necesidades, Contingencias). Ej: 15%
+
+  // NEW: Tracking & Actuals (Seguimiento Real)
+  actualStartDate?: string; // Fecha Real de Inicio
+  actualEndDate?: string; // Fecha Real de Fin
+  trackingNotes?: string; // Observaciones de seguimiento (ej: "Demora por lluvia")
 }
 
 export interface Holiday {
@@ -129,6 +172,25 @@ export interface CalendarPreset {
   nonWorkingDates: Holiday[];
 }
 
+// Estructura de Gastos Indirectos (PDF Costos)
+export interface PricingConfig {
+    generalExpensesPercent: number; // Gastos Generales (GGO + GGE) -> COSTO INDIRECTO
+    financialExpensesPercent: number; // Gastos Financieros
+    profitPercent: number; // Beneficio / Utilidad
+    taxPercent: number; // Impuestos (IVA/IIBB)
+}
+
+// NEW: Helper interfaces for Project specific labor definition
+export interface ProjectLaborDefinition {
+    laborCategoryId: string;
+    count: number;
+}
+
+export interface ProjectCrewDefinition {
+    crewId: string;
+    count: number;
+}
+
 export interface Project {
   id: string;
   organizationId: string; // Multitenant
@@ -138,6 +200,7 @@ export interface Project {
   companyName?: string;
   currency: string;
   startDate: string;
+  endDate?: string; // Fecha de Fin Prevista / Límite
   items: BudgetItem[];
   
   // Global Settings for Labor & Calendar
@@ -154,6 +217,13 @@ export interface Project {
   constructionSystem?: string; // Tradicional, Steel Frame, etc.
   structureType?: string; // Hormigón, Metálica, etc.
   foundationType?: string; // Platea, Zapatas, etc.
+
+  // Pricing Structure
+  pricing?: PricingConfig;
+
+  // NEW: Project Specific Resource Availability
+  laborForce?: ProjectLaborDefinition[]; // Available individual workers
+  assignedCrews?: ProjectCrewDefinition[]; // Available crews
 }
 
 export interface ProjectTemplate {
@@ -169,7 +239,7 @@ export interface UnitPriceAnalysis {
   materialCost: number;
   laborCost: number;
   toolCost: number; 
-  fixedCost: number; // NEW
+  fixedCost: number; // Maps to SUBCONTRATO
   totalUnitCost: number;
 }
 
@@ -302,4 +372,55 @@ export interface MeasurementSheet {
     totalQuantity: number;
     lastUpdated: string;
     updatedBy: string;
+}
+
+// --- QUALITY MANAGEMENT MODULE (GESTION DE CALIDAD) ---
+
+export type ControlType = 'variable' | 'attribute';
+
+export interface QualityCheckItem {
+    id: string;
+    description: string; // "Verificar plomo", "Asentamiento (Slump)"
+    type: ControlType;
+    acceptanceCriteria?: string; // "≤ 2mm/m", "Sin fisuras visibles", "10 +/- 2 cm"
+    // For Variables (Numeric)
+    unit?: string;
+    minValue?: number;
+    maxValue?: number;
+}
+
+export interface QualityProtocol {
+    id: string;
+    organizationId: string;
+    name: string; // e.g. "Protocolo de Hormigonado", "Control de Mampostería"
+    category: string; // Rubro associated
+    checks: QualityCheckItem[];
+}
+
+export interface QualityInspection {
+    id: string;
+    organizationId: string;
+    projectId: string;
+    taskId: string; // Linked to a BudgetItem/Task
+    protocolId: string;
+    date: string;
+    inspector: string; // User Name
+    status: 'passed' | 'failed' | 'conditional';
+    // Results store: key = checkItem.id, value = number (variable) or boolean (attribute)
+    results: Record<string, any>; 
+    comments?: string;
+    photos?: string[];
+}
+
+export interface NonConformity {
+    id: string;
+    organizationId: string;
+    projectId: string;
+    inspectionId?: string; // Linked to an inspection (optional, can be standalone)
+    date: string;
+    description: string;
+    severity: 'critical' | 'major' | 'minor'; // From PDF Slide 31
+    correctiveAction: string;
+    status: 'open' | 'closed';
+    assignedTo?: string; // Responsible person
 }
