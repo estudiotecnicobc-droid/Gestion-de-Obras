@@ -59,33 +59,33 @@ const AppContent = () => {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard': 
-        return <ProtectedRoute allowedRoles={['admin', 'engineering', 'foreman', 'client']}><Dashboard /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager', 'worker', 'client']}><Dashboard /></ProtectedRoute>;
       case 'management': 
-        return <ProtectedRoute allowedRoles={['admin', 'engineering', 'client']}><ManagementPanel /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager', 'client']}><ManagementPanel /></ProtectedRoute>;
       case 'subcontractors': 
-        return <ProtectedRoute allowedRoles={['admin', 'engineering']}><Subcontractors /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager']}><Subcontractors /></ProtectedRoute>;
       case 'budget': 
-        return <ProtectedRoute allowedRoles={['admin', 'engineering']}><BudgetEditor /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager']}><BudgetEditor /></ProtectedRoute>;
       case 'apu':
-        return <ProtectedRoute allowedRoles={['admin', 'engineering']}><APUBuilder /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager']}><APUBuilder /></ProtectedRoute>;
       case 'grid': 
-        return <ProtectedRoute allowedRoles={['admin', 'engineering']}><BudgetGrid /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager']}><BudgetGrid /></ProtectedRoute>;
       case 'planning': 
-        return <ProtectedRoute allowedRoles={['admin', 'engineering', 'foreman']}><Planning /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager', 'worker']}><Planning /></ProtectedRoute>;
       case 'reception': 
-        return <ProtectedRoute allowedRoles={['admin', 'foreman']}><MaterialReception /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'worker']}><MaterialReception /></ProtectedRoute>;
       case 'tools': 
-        return <ProtectedRoute allowedRoles={['admin', 'engineering']}><ToolsManager /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager']}><ToolsManager /></ProtectedRoute>;
       case 'admin': 
-        return <ProtectedRoute allowedRoles={['admin', 'engineering']}><DataAdmin /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager']}><DataAdmin /></ProtectedRoute>;
       case 'settings': 
         return <ProtectedRoute allowedRoles={['admin']}><ProjectSettings /></ProtectedRoute>;
       case 'documents':
-        return <ProtectedRoute allowedRoles={['admin', 'engineering', 'foreman', 'client']}><DocumentManager /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager', 'worker', 'client']}><DocumentManager /></ProtectedRoute>;
       case 'measurements':
-        return <ProtectedRoute allowedRoles={['admin', 'engineering']}><MeasurementSheetComponent /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager']}><MeasurementSheetComponent /></ProtectedRoute>;
       case 'quality':
-        return <ProtectedRoute allowedRoles={['admin', 'engineering', 'foreman']}><QualityControl /></ProtectedRoute>;
+        return <ProtectedRoute allowedRoles={['admin', 'project_manager', 'worker']}><QualityControl /></ProtectedRoute>;
       default: return <Dashboard />;
     }
   };

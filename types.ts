@@ -1,7 +1,7 @@
 
 // Definición de las entidades base del sistema
 
-export type Role = 'admin' | 'engineering' | 'foreman' | 'client';
+export type Role = 'admin' | 'project_manager' | 'worker' | 'client';
 
 // NEW: Cost Families based on User Request
 export type CostFamily = 'MATERIAL' | 'MANO DE OBRA' | 'EQUIPOS' | 'SUBCONTRATO' | 'COSTO INDIRECTO';
@@ -136,25 +136,7 @@ export interface TaskCrewYield {
   quantity: number; // Cantidad de cuadrillas asignadas (usualmente 1)
 }
 
-export interface BudgetItem {
-  id: string;
-  taskId: string;
-  quantity: number; 
-  startDate?: string; // Fecha de inicio PLANIFICADA
-  manualDuration?: number; // Duración forzada por el usuario
-  dependencies?: Dependency[]; // Vinculaciones
-  progress?: number; // Porcentaje de avance (0-100)
-  
-  // NEW: Planning specific overrides based on Methods & Time Study
-  crewsAssigned?: number; // Frentes de ataque (Cant_Personal en fórmula Coscarella)
-  efficiencyFactor?: number; // Valoración del Ritmo (fv). 1.0 = Normal (100%), 1.2 = Rápido, 0.8 = Lento
-  allowancePercent?: number; // Suplementos (Fatiga, Necesidades, Contingencias). Ej: 15%
 
-  // NEW: Tracking & Actuals (Seguimiento Real)
-  actualStartDate?: string; // Fecha Real de Inicio
-  actualEndDate?: string; // Fecha Real de Fin
-  trackingNotes?: string; // Observaciones de seguimiento (ej: "Demora por lluvia")
-}
 
 export interface Holiday {
   date: string; // YYYY-MM-DD
@@ -191,16 +173,21 @@ export interface ProjectCrewDefinition {
     count: number;
 }
 
+export type ProjectStatus = 'planning' | 'active' | 'completed' | 'suspended';
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'delayed';
+
 export interface Project {
   id: string;
   organizationId: string; // Multitenant
   name: string;
-  client: string;
+  client: string; // Client Name (Display)
+  clientId?: string; // Foreign Key to Client/User
   address?: string;
   companyName?: string;
   currency: string;
   startDate: string;
   endDate?: string; // Fecha de Fin Prevista / Límite
+  status: ProjectStatus; // NEW: Status field
   items: BudgetItem[];
   
   // Global Settings for Labor & Calendar
@@ -226,37 +213,36 @@ export interface Project {
   assignedCrews?: ProjectCrewDefinition[]; // Available crews
 }
 
-export interface ProjectTemplate {
+export interface BudgetItem {
   id: string;
-  name: string;
-  description: string;
-  tasks: Task[]; // Tareas a crear
-  rubros: string[]; // Rubros necesarios
-}
+  taskId: string; // Foreign Key to Master Task
+  
+  // Project-Specific Overrides (The "Task" entity in the requested schema)
+  name?: string; // Nombre de la tarea (Override)
+  description?: string; // Descripcion (Override)
+  
+  quantity: number; 
+  
+  // Planning / Scheduling
+  startDate?: string; // FechaInicioEstimada
+  endDate?: string; // FechaFinEstimada (Calculated or Manual)
+  manualDuration?: number; // Duración forzada por el usuario
+  
+  responsibleId?: string; // ResponsableID (Foreign Key to User/Personal)
+  status?: TaskStatus; // Estado
+  
+  dependencies?: Dependency[]; // Vinculaciones
+  progress?: number; // Porcentaje de avance (0-100)
+  
+  // NEW: Planning specific overrides based on Methods & Time Study
+  crewsAssigned?: number; // Frentes de ataque (Cant_Personal en fórmula Coscarella)
+  efficiencyFactor?: number; // Valoración del Ritmo (fv). 1.0 = Normal (100%), 1.2 = Rápido, 0.8 = Lento
+  allowancePercent?: number; // Suplementos (Fatiga, Necesidades, Contingencias). Ej: 15%
 
-export interface UnitPriceAnalysis {
-  taskId: string;
-  materialCost: number;
-  laborCost: number;
-  toolCost: number; 
-  fixedCost: number; // Maps to SUBCONTRATO
-  totalUnitCost: number;
-}
-
-export interface ImportResult {
-  success: boolean;
-  message: string;
-  details?: string[];
-}
-
-export interface Snapshot {
-  id: string;
-  organizationId: string; // Multitenant
-  date: string;
-  name: string;
-  totalCost: number;
-  items: BudgetItem[]; // Copia profunda de items
-  materialsSnapshot?: Material[]; // Copia de precios de materiales al momento del snapshot
+  // NEW: Tracking & Actuals (Seguimiento Real)
+  actualStartDate?: string; // Fecha Real de Inicio
+  actualEndDate?: string; // Fecha Real de Fin
+  trackingNotes?: string; // Observaciones de seguimiento (ej: "Demora por lluvia")
 }
 
 // --- RECEPTION MODULE ---
@@ -423,4 +409,41 @@ export interface NonConformity {
     correctiveAction: string;
     status: 'open' | 'closed';
     assignedTo?: string; // Responsible person
+}
+
+export interface ComputationResult {
+    id: string;
+    organizationId: string;
+    projectId: string;
+    budgetItemId: string; // The item this calculation belongs to
+    computationTaskId: string; // The template used (e.g., "Muro 0.15")
+    inputValues: Record<string, any>; // e.g. { "Largo": 5, "Alto": 3 }
+    resultQuantity: number; // The calculated result
+    createdAt: string;
+}
+
+export interface ComputationParameter {
+    name: string;
+    type: 'number' | 'string' | 'enum';
+    unit?: string;
+    options?: string[]; // For enum
+    min?: number;
+    max?: number;
+    defaultValue?: any;
+}
+
+export interface ComputationTask {
+    id: string;
+    rubroId: string;
+    name: string;
+    unit: string;
+    description: string;
+    parameters: ComputationParameter[];
+    formulaExample: string;
+    tags: string[];
+}
+
+export interface Rubro {
+    id: string;
+    name: string;
 }

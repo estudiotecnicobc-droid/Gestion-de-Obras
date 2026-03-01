@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { LayoutDashboard, Calculator, CalendarDays, Settings, HardHat, Wrench, SlidersHorizontal, Table, Truck, TrendingUp, Users, LogOut, Ruler, FileText, ClipboardCheck, Save, CheckCircle2, ArrowLeftRight, Building } from 'lucide-react';
+import { LayoutDashboard, Calculator, CalendarDays, Settings, HardHat, Wrench, SlidersHorizontal, Table, Truck, TrendingUp, Users, LogOut, Ruler, FileText, ClipboardCheck, Save, CheckCircle2, ArrowLeftRight, Building, Menu, ChevronLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Role } from '../types';
 import { useERP } from '../context/ERPContext';
@@ -14,6 +15,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
   const { user, logout } = useAuth();
   const { project, saveProject, exitProject } = useERP();
   const [isSaving, setIsSaving] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const handleGlobalSave = async () => {
       setIsSaving(true);
@@ -23,30 +25,32 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
 
   // Define menu items with required permissions
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'engineering', 'foreman', 'client'] },
-    { id: 'management', label: 'Control de Gestión', icon: TrendingUp, roles: ['admin', 'engineering', 'client'] },
-    { id: 'documents', label: 'Documentación', icon: FileText, roles: ['admin', 'engineering', 'foreman', 'client'] }, 
-    { id: 'quality', label: 'Control Calidad', icon: ClipboardCheck, roles: ['admin', 'engineering', 'foreman'] }, 
-    { id: 'measurements', label: 'Cómputos (Mediciones)', icon: Ruler, roles: ['admin', 'engineering'] }, 
-    { id: 'subcontractors', label: 'Subcontratistas', icon: Users, roles: ['admin', 'engineering'] },
-    { id: 'budget', label: 'Presupuesto', icon: Calculator, roles: ['admin', 'engineering'] },
-    { id: 'grid', label: 'Grilla de Costos', icon: Table, roles: ['admin', 'engineering'] },
-    { id: 'planning', label: 'Planificación', icon: CalendarDays, roles: ['admin', 'engineering', 'foreman'] },
-    { id: 'reception', label: 'Recepción (Remitos)', icon: Truck, roles: ['admin', 'foreman'] },
-    { id: 'tools', label: 'Equipos', icon: Wrench, roles: ['admin', 'engineering'] },
-    { id: 'admin', label: 'Base de Datos', icon: Settings, roles: ['admin', 'engineering'] },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'project_manager', 'worker', 'client'] },
+    { id: 'management', label: 'Control de Gestión', icon: TrendingUp, roles: ['admin', 'project_manager', 'client'] },
+    { id: 'documents', label: 'Documentación', icon: FileText, roles: ['admin', 'project_manager', 'worker', 'client'] }, 
+    { id: 'quality', label: 'Control Calidad', icon: ClipboardCheck, roles: ['admin', 'project_manager', 'worker'] }, 
+    { id: 'measurements', label: 'Cómputos (Mediciones)', icon: Ruler, roles: ['admin', 'project_manager'] }, 
+    { id: 'subcontractors', label: 'Subcontratistas', icon: Users, roles: ['admin', 'project_manager'] },
+    { id: 'budget', label: 'Presupuesto', icon: Calculator, roles: ['admin', 'project_manager'] },
+    { id: 'grid', label: 'Grilla de Costos', icon: Table, roles: ['admin', 'project_manager'] },
+    { id: 'planning', label: 'Planificación', icon: CalendarDays, roles: ['admin', 'project_manager', 'worker'] },
+    { id: 'reception', label: 'Recepción (Remitos)', icon: Truck, roles: ['admin', 'worker'] },
+    { id: 'tools', label: 'Equipos', icon: Wrench, roles: ['admin', 'project_manager'] },
+    { id: 'admin', label: 'Base de Datos', icon: Settings, roles: ['admin', 'project_manager'] },
     { id: 'settings', label: 'Configuración', icon: SlidersHorizontal, roles: ['admin'] },
   ];
 
   const visibleItems = navItems.filter(item => item.roles.includes(user?.role as Role));
 
   return (
-    <div className="flex h-screen bg-slate-50 font-sans">
+    <div className="flex h-screen bg-slate-50 font-sans overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-64 bg-slate-900 text-white flex flex-col flex-shrink-0 print:hidden transition-all relative z-20 shadow-xl">
+      <aside 
+        className={`${isSidebarOpen ? 'w-64 translate-x-0' : 'w-0 -translate-x-full opacity-0'} bg-slate-900 text-white flex flex-col flex-shrink-0 print:hidden transition-all duration-300 ease-in-out relative z-20 shadow-xl overflow-hidden`}
+      >
         
         {/* Sidebar Header with Context Card */}
-        <div className="p-4 bg-slate-950">
+        <div className="p-4 bg-slate-950 relative">
             <div className="bg-slate-800 rounded-xl p-3 border border-slate-700 shadow-sm">
                 <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
@@ -65,6 +69,15 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
                 </div>
                 <div className="text-[10px] text-slate-400 truncate">{project.client}</div>
             </div>
+            
+            {/* Close Sidebar Button */}
+            <button 
+                onClick={() => setIsSidebarOpen(false)}
+                className="absolute top-2 right-2 text-slate-500 hover:text-white p-1 rounded-full hover:bg-slate-800 transition-colors"
+                title="Ocultar Menú"
+            >
+                <ChevronLeft size={16} />
+            </button>
         </div>
 
         {/* User Info */}
@@ -112,7 +125,18 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto bg-slate-100">
+      <main className="flex-1 overflow-auto bg-slate-100 relative transition-all duration-300">
+        {/* Open Sidebar Button (Floating) */}
+        {!isSidebarOpen && (
+            <button
+                onClick={() => setIsSidebarOpen(true)}
+                className="absolute top-4 left-4 z-30 bg-white p-2 rounded-lg shadow-md border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-300 transition-all animate-in fade-in slide-in-from-left-2"
+                title="Mostrar Menú"
+            >
+                <Menu size={20} />
+            </button>
+        )}
+
         <div className="p-6 md:p-8 max-w-[1600px] mx-auto h-full">
             {children}
         </div>

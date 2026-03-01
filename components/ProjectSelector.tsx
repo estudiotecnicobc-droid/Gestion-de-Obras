@@ -16,7 +16,7 @@ export const ProjectSelector: React.FC = () => {
       startDate: new Date().toISOString().split('T')[0]
   });
 
-  const canCreate = hasPermission(['admin', 'engineering']);
+  const canCreate = hasPermission(['admin', 'project_manager']);
 
   const handleCreate = () => {
       if (!newProject.name) return;

@@ -52,28 +52,28 @@ export const Login: React.FC = () => {
             </button>
 
             <button 
-              onClick={() => handleLogin('engineering')}
+              onClick={() => handleLogin('project_manager')}
               className="w-full p-4 rounded-xl border border-slate-200 hover:border-purple-500 hover:bg-purple-50 transition-all flex items-center gap-4 group"
             >
               <div className="p-2 bg-slate-100 rounded-lg group-hover:bg-purple-200 text-slate-600 group-hover:text-purple-700">
                 <Hammer size={20} />
               </div>
               <div className="text-left">
-                <div className="font-bold text-slate-800">Ingeniería</div>
-                <div className="text-xs text-slate-500">Edición de Presupuestos y APU</div>
+                <div className="font-bold text-slate-800">Gerente de Proyecto</div>
+                <div className="text-xs text-slate-500">Gestión de proyectos y tareas</div>
               </div>
             </button>
 
             <button 
-              onClick={() => handleLogin('foreman')}
+              onClick={() => handleLogin('worker')}
               className="w-full p-4 rounded-xl border border-slate-200 hover:border-orange-500 hover:bg-orange-50 transition-all flex items-center gap-4 group"
             >
               <div className="p-2 bg-slate-100 rounded-lg group-hover:bg-orange-200 text-slate-600 group-hover:text-orange-700">
                 <Users size={20} />
               </div>
               <div className="text-left">
-                <div className="font-bold text-slate-800">Capataz / Obra</div>
-                <div className="text-xs text-slate-500">Remitos, Fotos y Avances</div>
+                <div className="font-bold text-slate-800">Trabajador</div>
+                <div className="text-xs text-slate-500">Visualización y actualización de tareas</div>
               </div>
             </button>
 

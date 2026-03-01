@@ -4,9 +4,9 @@ import { calculateUnitPrice } from '../services/calculationService';
 import { 
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCcw, 
   Database, Wrench, Package, ListChecks, Plus, Trash2, Edit2, Save, X, Users, Clock, BarChart3, Tags, ClipboardCopy, ArrowRight, Calculator, FileSpreadsheet, Settings, Hammer, AlertCircle, HardHat, Info, Printer, PieChart as PieChartIcon, Activity,
-  ZoomOut, ZoomIn, DollarSign, Percent, LayoutGrid, Truck, CheckSquare, Square, Check, Bot, Sparkles, TrendingUp, Search, Download, ShieldCheck
+  ZoomOut, ZoomIn, DollarSign, Percent, LayoutGrid, Truck, CheckSquare, Square, Check, Bot, Sparkles, TrendingUp, Search, Download, ShieldCheck, ChevronDown, ChevronRight
 } from 'lucide-react';
-import { INITIAL_MATERIALS, INITIAL_TOOLS, INITIAL_LABOR_CATEGORIES } from '../constants';
+import { INITIAL_MATERIALS, INITIAL_TOOLS, INITIAL_LABOR_CATEGORIES, RUBRO_PRESETS } from '../constants';
 import { Material, Task, Tool, LaborCategory, TaskYield, Crew } from '../types';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { GoogleGenAI } from "@google/genai";
@@ -38,6 +38,7 @@ export const DataAdmin: React.FC = () => {
   
   // Bulk Selection State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [expandedRubro, setExpandedRubro] = useState<string | null>(null);
 
   // State for APU Editor Panel
   const [editingAPUTask, setEditingAPUTask] = useState<Task | null>(null);
@@ -394,6 +395,32 @@ export const DataAdmin: React.FC = () => {
       setEditingAPUTask(newTask);
       setLocalTask({ ...newTask }); 
       setIsNewTask(true);
+  };
+
+  const handleCreateTaskFromPreset = (preset: Partial<Task>) => {
+      const newId = crypto.randomUUID();
+      const newTask: Task = {
+          id: newId,
+          organizationId: 'org_a',
+          name: preset.name || 'Nueva Tarea',
+          unit: preset.unit || 'gl',
+          laborCost: preset.laborCost || 0,
+          dailyYield: preset.dailyYield || 1,
+          yieldHH: preset.yieldHH || 0,
+          category: preset.category || rubros[0] || 'GENERAL',
+          fixedCost: 0,
+          fixedCostDescription: '',
+          description: preset.description || ''
+      };
+      
+      addTask(newTask);
+      
+      // Switch to tasks tab and open editor
+      setActiveSubTab('tasks');
+      setEditingAPUTask(newTask);
+      setLocalTask({...newTask});
+      setIsNewTask(true);
+      setMessage({ type: 'success', text: 'Tarea creada desde plantilla. Puede editarla ahora.' });
   };
 
   const handleSaveTaskChanges = () => {
@@ -1001,8 +1028,13 @@ export const DataAdmin: React.FC = () => {
                     apu = calculateUnitPrice(item, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
                 }
 
+                // NEW: Rubro Expansion Logic
+                const isExpanded = activeSubTab === 'rubros' && expandedRubro === item;
+                const presetTasks = activeSubTab === 'rubros' ? RUBRO_PRESETS[item] || [] : [];
+
                 return (
-                <tr key={itemId} className={`hover:bg-slate-50 group ${editingId === itemId || isEditingAPU || isEditingCrew || isEditingConfig ? 'bg-blue-50' : ''} ${isSelected ? 'bg-blue-50/30' : ''}`}>
+                <React.Fragment key={itemId}>
+                <tr className={`hover:bg-slate-50 group ${editingId === itemId || isEditingAPU || isEditingCrew || isEditingConfig ? 'bg-blue-50' : ''} ${isSelected ? 'bg-blue-50/30' : ''}`}>
                   <td className="p-4 text-center">
                       <input 
                         type="checkbox" 
@@ -1025,14 +1057,33 @@ export const DataAdmin: React.FC = () => {
                         }}
                       />
                     ) : (
-                      <div>
-                          <div className="font-medium text-slate-800">{displayName}</div>
-                          {activeSubTab === 'crews' && item.description && <div className="text-[10px] text-slate-400">{item.description}</div>}
-                          {activeSubTab === 'materials' && item.commercialFormat && <div className="text-[10px] text-slate-400">{item.commercialFormat}</div>}
-                          {activeSubTab === 'apu' && (
-                             <div className="text-[10px] text-slate-400">Rend: {item.dailyYield} u/d • {item.unit}</div>
-                          )}
-                      </div>
+                      activeSubTab === 'rubros' ? (
+                          <div 
+                              className="flex items-center gap-2 cursor-pointer select-none"
+                              onClick={() => setExpandedRubro(expandedRubro === item ? null : item)}
+                          >
+                              {presetTasks.length > 0 && (
+                                  <div className="text-slate-400 transition-transform duration-200">
+                                      {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                  </div>
+                              )}
+                              <div className="font-medium text-slate-800">{displayName}</div>
+                              {presetTasks.length > 0 && (
+                                  <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full border border-slate-200">
+                                      {presetTasks.length} plantillas
+                                  </span>
+                              )}
+                          </div>
+                      ) : (
+                          <div>
+                              <div className="font-medium text-slate-800">{displayName}</div>
+                              {activeSubTab === 'crews' && item.description && <div className="text-[10px] text-slate-400">{item.description}</div>}
+                              {activeSubTab === 'materials' && item.commercialFormat && <div className="text-[10px] text-slate-400">{item.commercialFormat}</div>}
+                              {activeSubTab === 'apu' && (
+                                 <div className="text-[10px] text-slate-400">Rend: {item.dailyYield} u/d • {item.unit}</div>
+                              )}
+                          </div>
+                      )
                     )}
                     {(activeSubTab !== 'rubros' && activeSubTab !== 'apu') && <div className="text-[10px] text-slate-400 font-mono mt-0.5">{itemId.substring(0, 12)}</div>}
                   </td>
@@ -1192,6 +1243,45 @@ export const DataAdmin: React.FC = () => {
                       </div>
                   </td>
                 </tr>
+                {/* Expanded Row for Rubros */}
+                {isExpanded && (
+                    <tr className="bg-slate-50/50 animate-in fade-in slide-in-from-top-2">
+                        <td colSpan={10} className="p-0">
+                            <div className="p-4 pl-12 border-b border-slate-100 shadow-inner">
+                                <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 flex items-center gap-2">
+                                    <ListChecks size={14} className="text-blue-500" /> Tareas Sugeridas para {item}
+                                </h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    {presetTasks.map((pt, idx) => (
+                                        <div key={idx} className="bg-white border border-slate-200 rounded-lg p-3 hover:shadow-md transition-all group/card relative overflow-hidden">
+                                            <div className="flex justify-between items-start mb-1">
+                                                <h5 className="font-bold text-slate-700 text-sm">{pt.name}</h5>
+                                                <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 border border-slate-200">{pt.unit}</span>
+                                            </div>
+                                            <p className="text-xs text-slate-500 mb-3 line-clamp-2">{pt.description || 'Sin descripción'}</p>
+                                            
+                                            <div className="flex items-center justify-between mt-auto pt-2 border-t border-slate-50">
+                                                <div className="text-xs font-mono text-slate-400">
+                                                    Rend: {pt.dailyYield} u/d
+                                                </div>
+                                                <button 
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleCreateTaskFromPreset(pt);
+                                                    }}
+                                                    className="flex items-center gap-1 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white px-2 py-1 rounded text-xs font-bold transition-colors"
+                                                >
+                                                    <Plus size={12} /> Crear Tarea
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                )}
+                </React.Fragment>
               )})}
             </tbody>
           </table>
@@ -1485,13 +1575,129 @@ export const DataAdmin: React.FC = () => {
              </div>
              {/* Content */}
              <div className="flex-1 overflow-y-auto p-5 space-y-6">
-                {/* ... (Existing APU content logic remains identical, omitted for brevity in this specific update block to avoid XML clutter, but assume it is here) ... */}
-                {/* 1. Rendimiento General */}
-                <div className="space-y-4">
-                    {/* ... */}
-                    {/* (This section is unchanged from previous context) */}
+                
+                {/* Description */}
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Descripción / Especificación</label>
+                    <textarea 
+                        className="w-full p-2 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-purple-500 outline-none h-20 resize-none"
+                        placeholder="Detalles técnicos de la tarea..."
+                        value={localTask.description || ''}
+                        onChange={e => setLocalTask({...localTask, description: e.target.value})}
+                    />
                 </div>
-                {/* ... Add Resource Form ... */}
+
+                {/* Parameters Grid */}
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Rendimiento Diario (u/d)</label>
+                        <input 
+                            type="number"
+                            className="w-full p-2 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-purple-500 outline-none"
+                            value={localTask.dailyYield}
+                            onChange={e => setLocalTask({...localTask, dailyYield: parseFloat(e.target.value)})}
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1">Unidades por día de trabajo.</p>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Rendimiento HH (h/u)</label>
+                        <input 
+                            type="number"
+                            className="w-full p-2 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-purple-500 outline-none"
+                            value={localTask.yieldHH || 0}
+                            onChange={e => setLocalTask({...localTask, yieldHH: parseFloat(e.target.value)})}
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1">Horas Hombre por unidad.</p>
+                    </div>
+                </div>
+
+                {/* Manual Cost Override */}
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Costo Mano de Obra (Manual)</label>
+                    <div className="flex items-center gap-2">
+                        <span className="text-slate-400 font-bold">$</span>
+                        <input 
+                            type="number"
+                            className="w-full p-2 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-purple-500 outline-none"
+                            value={localTask.laborCost}
+                            onChange={e => setLocalTask({...localTask, laborCost: parseFloat(e.target.value)})}
+                        />
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1">Si se define, anula el cálculo automático del APU.</p>
+                </div>
+
+                {/* Resources List (Simplified) */}
+                <div className="pt-4 border-t border-slate-100">
+                    <h4 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
+                        <ListChecks size={16} className="text-purple-600" /> Recursos Asignados (APU)
+                    </h4>
+                    
+                    {/* Materials */}
+                    <div className="mb-4">
+                        <h5 className="text-xs font-bold text-slate-500 uppercase mb-2">Materiales</h5>
+                        <div className="space-y-2">
+                            {currentAPUMaterials.map((m: any) => (
+                                <div key={m.materialId} className="flex items-center justify-between text-sm bg-slate-50 p-2 rounded border border-slate-100">
+                                    <span className="font-medium text-slate-700">{m.data?.name || 'Material Desconocido'}</span>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-slate-500">{m.quantity} {m.data?.unit}</span>
+                                        <button onClick={() => removeTaskYield(localTask.id, m.materialId)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+                                    </div>
+                                </div>
+                            ))}
+                            {currentAPUMaterials.length === 0 && <p className="text-xs text-slate-400 italic">Sin materiales asignados.</p>}
+                        </div>
+                    </div>
+
+                    {/* Tools */}
+                    <div className="mb-4">
+                        <h5 className="text-xs font-bold text-slate-500 uppercase mb-2">Equipos</h5>
+                        <div className="space-y-2">
+                            {currentAPUTools.map((t: any) => (
+                                <div key={t.toolId} className="flex items-center justify-between text-sm bg-slate-50 p-2 rounded border border-slate-100">
+                                    <span className="font-medium text-slate-700">{t.data?.name || 'Equipo Desconocido'}</span>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-slate-500">{t.hoursPerUnit} h/u</span>
+                                        <button onClick={() => removeTaskToolYield(localTask.id, t.toolId)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+                                    </div>
+                                </div>
+                            ))}
+                            {currentAPUTools.length === 0 && <p className="text-xs text-slate-400 italic">Sin equipos asignados.</p>}
+                        </div>
+                    </div>
+
+                    {/* Add Resource Form */}
+                    <div className="mt-4 bg-purple-50 p-3 rounded-lg border border-purple-100">
+                        <label className="block text-[10px] font-bold text-purple-800 uppercase mb-2">Agregar Recurso</label>
+                        <div className="flex gap-2 mb-2">
+                            <select 
+                                className="flex-1 text-xs border border-purple-200 rounded p-1.5 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                                value={resourceType}
+                                onChange={(e: any) => setResourceType(e.target.value)}
+                            >
+                                <option value="material">Material</option>
+                                <option value="tool">Equipo</option>
+                            </select>
+                            <select 
+                                className="flex-[2] text-xs border border-purple-200 rounded p-1.5 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                                value={resourceToAdd}
+                                onChange={e => setResourceToAdd(e.target.value)}
+                            >
+                                <option value="">-- Seleccionar --</option>
+                                {resourceType === 'material' && materials.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                {resourceType === 'tool' && tools.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                        </div>
+                        <button 
+                            onClick={handleAddResourceToAPU}
+                            disabled={!resourceToAdd}
+                            className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold py-1.5 rounded transition-colors disabled:opacity-50"
+                        >
+                            + Agregar
+                        </button>
+                    </div>
+                </div>
+
              </div>
 
              {/* Footer Actions */}

@@ -197,6 +197,15 @@ export const INITIAL_MATERIALS: Material[] = [
   { id: 'm3', organizationId: 'org_a', name: 'Ladrillo Hueco 12x18x33', unit: 'unidad', cost: 0.45, category: 'Mampuestos', provider: 'Cerámica Norte', minStock: 1000, family: 'MATERIAL' },
   { id: 'm4', organizationId: 'org_a', name: 'Hierro 8mm', unit: 'barra 12m', cost: 12.00, category: 'Metales', provider: 'Aceros SA', minStock: 100, family: 'MATERIAL' },
   { id: 'm5', organizationId: 'org_a', name: 'Pintura Látex Interior', unit: 'litro', cost: 6.50, category: 'Terminaciones', provider: 'Pinturas Color', minStock: 20, family: 'MATERIAL' },
+  // NEW MATERIALS FOR CALCULATIONS
+  { id: 'm6', organizationId: 'org_a', name: 'Ladrillo Común', unit: 'unidad', cost: 0.20, category: 'Mampuestos', provider: 'Ladrillera', minStock: 5000, family: 'MATERIAL' },
+  { id: 'm7', organizationId: 'org_a', name: 'Cal Hidráulica', unit: 'bolsa 20kg', cost: 4.50, category: 'Aglomerantes', provider: 'Construmart', minStock: 30, family: 'MATERIAL' },
+  { id: 'm8', organizationId: 'org_a', name: 'Placa Yeso 12.5mm', unit: 'm2', cost: 5.50, category: 'Construcción en Seco', provider: 'Durlock Center', minStock: 50, family: 'MATERIAL' },
+  { id: 'm9', organizationId: 'org_a', name: 'Perfil Montante 70mm', unit: 'ml', cost: 3.20, category: 'Construcción en Seco', provider: 'Durlock Center', minStock: 100, family: 'MATERIAL' },
+  { id: 'm10', organizationId: 'org_a', name: 'Perfil Solera 70mm', unit: 'ml', cost: 3.00, category: 'Construcción en Seco', provider: 'Durlock Center', minStock: 100, family: 'MATERIAL' },
+  { id: 'm11', organizationId: 'org_a', name: 'Tornillos T2', unit: 'caja 100u', cost: 2.50, category: 'Fijaciones', provider: 'Ferretería', minStock: 10, family: 'MATERIAL' },
+  { id: 'm12', organizationId: 'org_a', name: 'Masilla Durlock', unit: 'kg', cost: 1.20, category: 'Construcción en Seco', provider: 'Durlock Center', minStock: 20, family: 'MATERIAL' },
+  { id: 'm13', organizationId: 'org_a', name: 'Cinta de Papel', unit: 'rollo', cost: 1.50, category: 'Construcción en Seco', provider: 'Durlock Center', minStock: 10, family: 'MATERIAL' },
 ];
 
 export const INITIAL_TOOLS: Tool[] = [
@@ -204,11 +213,94 @@ export const INITIAL_TOOLS: Tool[] = [
   { id: 'eq2', organizationId: 'org_a', name: 'Andamio Tubular', category: 'Estructuras', costPerHour: 0.80, family: 'EQUIPOS' },
   { id: 'eq3', organizationId: 'org_a', name: 'Rodillo Profesional', category: 'Herramienta Manual', costPerHour: 0.10, family: 'EQUIPOS' },
   { id: 'eq4', organizationId: 'org_a', name: 'Vibrador de Hormigón', category: 'Maquinaria Ligera', costPerHour: 3.00, family: 'EQUIPOS' },
+  { id: 'eq5', organizationId: 'org_a', name: 'Atornilladora Eléctrica', category: 'Herramienta Manual', costPerHour: 0.50, family: 'EQUIPOS' },
 ];
 
 export const INITIAL_TASKS: Task[] = [
+  // 1. Muro Ladrillo Común 0.15m
   { 
-      id: 't1', organizationId: 'org_a', name: 'Mampostería Ladrillo Hueco', unit: 'm2', laborCost: 15.00, dailyYield: 8, yieldHH: 0.95, category: '06 MAMPOSTERÍA, Y OTROS CERRAMIENTOS',
+      id: 'task_muro_comun_15', organizationId: 'org_a', name: 'Muro Ladrillo Común 0.15m', unit: 'm2', laborCost: 0, dailyYield: 6, yieldHH: 1.60, category: '06 MAMPOSTERÍA',
+      standardYields: {
+          materials: [
+              { materialId: 'm6', quantity: 60, wastePercent: 5 }, // Ladrillos
+              { materialId: 'm7', quantity: 0.3, wastePercent: 10 }, // Cal (bolsa) ~6kg
+              { materialId: 'm1', quantity: 0.05, wastePercent: 5 }, // Cemento (bolsa) ~2.5kg
+              { materialId: 'm2', quantity: 0.03, wastePercent: 10 } // Arena (m3)
+          ],
+          labor: [
+              { laborCategoryId: 'lc2', hhPerUnit: 0.80 }, // Oficial
+              { laborCategoryId: 'lc4', hhPerUnit: 0.80 }  // Ayudante
+          ],
+          equipment: [
+              { toolId: 'eq2', hoursPerUnit: 0.50 }, // Andamio
+              { toolId: 'eq1', hoursPerUnit: 0.10 }  // Hormigonera
+          ]
+      }
+  },
+  // 2. Muro Ladrillo Común 0.10m
+  { 
+      id: 'task_muro_comun_10', organizationId: 'org_a', name: 'Muro Ladrillo Común 0.10m', unit: 'm2', laborCost: 0, dailyYield: 8, yieldHH: 1.20, category: '06 MAMPOSTERÍA',
+      standardYields: {
+          materials: [
+              { materialId: 'm6', quantity: 34, wastePercent: 5 }, 
+              { materialId: 'm7', quantity: 0.18, wastePercent: 10 }, 
+              { materialId: 'm1', quantity: 0.03, wastePercent: 5 }, 
+              { materialId: 'm2', quantity: 0.02, wastePercent: 10 } 
+          ],
+          labor: [
+              { laborCategoryId: 'lc2', hhPerUnit: 0.60 }, 
+              { laborCategoryId: 'lc4', hhPerUnit: 0.60 } 
+          ],
+          equipment: [
+              { toolId: 'eq2', hoursPerUnit: 0.40 }, 
+              { toolId: 'eq1', hoursPerUnit: 0.08 } 
+          ]
+      }
+  },
+  // 3. Muro Ladrillo Hueco
+  { 
+      id: 'task_muro_hueco', organizationId: 'org_a', name: 'Muro Ladrillo Hueco 12x18x33', unit: 'm2', laborCost: 0, dailyYield: 8, yieldHH: 0.95, category: '06 MAMPOSTERÍA',
+      standardYields: {
+          materials: [
+              { materialId: 'm3', quantity: 16, wastePercent: 5 }, 
+              { materialId: 'm7', quantity: 0.15, wastePercent: 10 }, 
+              { materialId: 'm1', quantity: 0.04, wastePercent: 5 }, 
+              { materialId: 'm2', quantity: 0.015, wastePercent: 10 } 
+          ],
+          labor: [
+              { laborCategoryId: 'lc2', hhPerUnit: 0.50 }, 
+              { laborCategoryId: 'lc4', hhPerUnit: 0.45 } 
+          ],
+          equipment: [
+              { toolId: 'eq2', hoursPerUnit: 0.50 },
+              { toolId: 'eq1', hoursPerUnit: 0.05 }
+          ]
+      }
+  },
+  // 4. Tabique Durlock
+  { 
+      id: 'task_tabique_durlock', organizationId: 'org_a', name: 'Tabique Durlock (W70)', unit: 'm2', laborCost: 0, dailyYield: 15, yieldHH: 1.00, category: '06 MAMPOSTERÍA',
+      standardYields: {
+          materials: [
+              { materialId: 'm8', quantity: 2.05, wastePercent: 5 }, // Placas (2 lados)
+              { materialId: 'm9', quantity: 2.2, wastePercent: 5 }, // Montantes
+              { materialId: 'm10', quantity: 0.8, wastePercent: 5 }, // Soleras
+              { materialId: 'm11', quantity: 0.3, wastePercent: 2 }, // Tornillos (fracción caja)
+              { materialId: 'm12', quantity: 0.5, wastePercent: 10 }, // Masilla
+              { materialId: 'm13', quantity: 0.05, wastePercent: 5 } // Cinta
+          ],
+          labor: [
+              { laborCategoryId: 'lc1', hhPerUnit: 0.50 }, // Oficial Especializado
+              { laborCategoryId: 'lc4', hhPerUnit: 0.50 }  // Ayudante
+          ],
+          equipment: [
+              { toolId: 'eq2', hoursPerUnit: 0.20 },
+              { toolId: 'eq5', hoursPerUnit: 0.50 } // Atornilladora
+          ]
+      }
+  },
+  { 
+      id: 't1', organizationId: 'org_a', name: 'Mampostería Ladrillo Hueco (Legacy)', unit: 'm2', laborCost: 15.00, dailyYield: 8, yieldHH: 0.95, category: '06 MAMPOSTERÍA, Y OTROS CERRAMIENTOS',
       standardYields: {
           materials: [{ materialId: 'm1', quantity: 0.2, wastePercent: 5 }, { materialId: 'm3', quantity: 16, wastePercent: 3 }],
           labor: [{ laborCategoryId: 'lc2', hhPerUnit: 0.5 }, { laborCategoryId: 'lc4', hhPerUnit: 0.45 }],
@@ -307,6 +399,7 @@ export const INITIAL_PROJECT: Project = {
   currency: '$',
   startDate: new Date().toISOString().split('T')[0],
   endDate: '',
+  status: 'planning', // NEW: Default Status
   
   // Settings Default
   workdayHours: 9,
@@ -330,10 +423,36 @@ export const INITIAL_PROJECT: Project = {
   assignedCrews: [],
 
   items: [
-    { id: 'bi1', taskId: 't1', quantity: 120 }, 
-    { id: 'bi2', taskId: 't2', quantity: 240 }, 
-    { id: 'bi3', taskId: 't4', quantity: 240 }, 
+    { id: 'bi1', taskId: 't1', quantity: 120, status: 'pending' }, 
+    { id: 'bi2', taskId: 't2', quantity: 240, status: 'pending' }, 
+    { id: 'bi3', taskId: 't4', quantity: 240, status: 'pending' }, 
   ]
+};
+
+export const RUBRO_PRESETS: Record<string, Partial<Task>[]> = {
+    "34 PINTURA": [
+        { name: "Pintura Látex Interior (2 manos)", unit: "m2", category: "34 PINTURA", laborCost: 5, dailyYield: 25, description: "Aplicación de enduido parcial, lijado y 2 manos de látex." },
+        { name: "Pintura Látex Exterior", unit: "m2", category: "34 PINTURA", laborCost: 6, dailyYield: 20, description: "Impermeabilizante exterior." },
+        { name: "Esmalte Sintético en Carpinterías", unit: "m2", category: "34 PINTURA", laborCost: 8, dailyYield: 10, description: "Lijado, fondo y esmalte." },
+        { name: "Barniz en Maderas", unit: "m2", category: "34 PINTURA", laborCost: 7, dailyYield: 12, description: "Lijado y 3 manos de barniz." },
+        { name: "Preparación de Superficies (Enduido Completo)", unit: "m2", category: "34 PINTURA", laborCost: 4, dailyYield: 15, description: "Enduido completo y lijado." }
+    ],
+    "06 MAMPOSTERÍA, Y OTROS CERRAMIENTOS": [
+        { name: "Mampostería Ladrillo Común 0.15", unit: "m2", category: "06 MAMPOSTERÍA, Y OTROS CERRAMIENTOS", laborCost: 18, dailyYield: 6, description: "Muro elevación ladrillo común." },
+        { name: "Mampostería Ladrillo Hueco 12x18x33", unit: "m2", category: "06 MAMPOSTERÍA, Y OTROS CERRAMIENTOS", laborCost: 14, dailyYield: 9, description: "Cerramiento ladrillo cerámico hueco." },
+        { name: "Mampostería Ladrillo Hueco 18x18x33", unit: "m2", category: "06 MAMPOSTERÍA, Y OTROS CERRAMIENTOS", laborCost: 15, dailyYield: 8, description: "Muro portante cerámico." },
+        { name: "Tabique Durlock W70", unit: "m2", category: "06 MAMPOSTERÍA, Y OTROS CERRAMIENTOS", laborCost: 12, dailyYield: 15, description: "Tabique placa de yeso estructura 70mm." }
+    ],
+    "05 ESTRUCTURAS RESISTENTES": [
+        { name: "Hormigón Armado Bases", unit: "m3", category: "05 ESTRUCTURAS RESISTENTES", laborCost: 45, dailyYield: 4, description: "Hormigonado de bases aisladas." },
+        { name: "Hormigón Armado Vigas y Columnas", unit: "m3", category: "05 ESTRUCTURAS RESISTENTES", laborCost: 80, dailyYield: 3, description: "Estructura de elevación." },
+        { name: "Losa Viguetas", unit: "m2", category: "05 ESTRUCTURAS RESISTENTES", laborCost: 22, dailyYield: 15, description: "Losa cerámica con viguetas pretensadas." }
+    ],
+    "08 REVOQUES": [
+        { name: "Revoque Grueso Interior", unit: "m2", category: "08 REVOQUES", laborCost: 11, dailyYield: 12 },
+        { name: "Revoque Fino Interior", unit: "m2", category: "08 REVOQUES", laborCost: 13, dailyYield: 15 },
+        { name: "Revoque Exterior Impermeable (Cerecita)", unit: "m2", category: "08 REVOQUES", laborCost: 14, dailyYield: 10 }
+    ]
 };
 
 // --- INITIAL QUALITY PROTOCOLS (Based on PDF) ---

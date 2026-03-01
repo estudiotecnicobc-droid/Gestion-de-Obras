@@ -566,7 +566,7 @@ export const ManagementPanel: React.FC = () => {
           {/* Critical Deviations Table */}
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col">
               <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2">
-                  <AlertTriangle size={20} className="text-amber-500" /> Desvíos de Insumos (>10%)
+                  <AlertTriangle size={20} className="text-amber-500" /> Desvíos de Insumos (&gt;10%)
               </h3>
               <div className="flex-1 overflow-auto">
                  {deviations.length === 0 ? (

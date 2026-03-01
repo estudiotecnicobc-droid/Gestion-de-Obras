@@ -28,7 +28,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Simulación de Login - En producción esto validaría contra backend
     const mockUser: User = {
       id: crypto.randomUUID(),
-      name: role === 'admin' ? 'Administrador' : role === 'engineering' ? 'Ing. Civil' : role === 'foreman' ? 'Capataz Obra' : 'Cliente Visor',
+      name: role === 'admin' ? 'Administrador' : role === 'project_manager' ? 'Gerente de Proyecto' : role === 'worker' ? 'Trabajador' : 'Cliente Visor',
       email: `${role}@empresa.com`,
       role: role,
       organizationId: organizationId

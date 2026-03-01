@@ -16,7 +16,7 @@ export const ProjectHub: React.FC = () => {
       startDate: new Date().toISOString().split('T')[0]
   });
 
-  const canCreate = hasPermission(['admin', 'engineering']);
+  const canCreate = hasPermission(['admin', 'project_manager']);
 
   const handleCreate = () => {
       if (!newProject.name) return;
@@ -94,8 +94,16 @@ export const ProjectHub: React.FC = () => {
                             </div>
 
                             <div className="flex justify-between items-start mb-4 relative z-10">
-                                <div className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border border-emerald-100">
-                                    En Ejecución
+                                <div className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${
+                                    project.status === 'active' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                                    project.status === 'completed' ? 'bg-slate-100 text-slate-600 border-slate-200' :
+                                    project.status === 'suspended' ? 'bg-red-50 text-red-700 border-red-100' :
+                                    'bg-blue-50 text-blue-700 border-blue-100' // planning
+                                }`}>
+                                    {project.status === 'active' ? 'En Ejecución' :
+                                     project.status === 'completed' ? 'Finalizado' :
+                                     project.status === 'suspended' ? 'Suspendido' :
+                                     'Planificación'}
                                 </div>
                             </div>
                             
