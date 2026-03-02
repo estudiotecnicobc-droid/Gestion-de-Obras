@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useMemo, ReactNode, useEffect } from 'react';
-import { Material, Task, TaskYield, TaskToolYield, Tool, Project, BudgetItem, ImportResult, LaborCategory, ProjectTemplate, Snapshot, Reception, Subcontractor, Contract, Certification, CalendarPreset, ProjectDocument, MeasurementSheet, Crew, TaskCrewYield, QualityProtocol, QualityInspection, NonConformity } from '../types';
-import { INITIAL_MATERIALS, INITIAL_TASKS, INITIAL_YIELDS, INITIAL_PROJECT, INITIAL_TOOLS, INITIAL_TOOL_YIELDS, INITIAL_LABOR_CATEGORIES, INITIAL_RUBROS, INITIAL_CALENDAR_PRESETS, INITIAL_CREWS, INITIAL_CREW_YIELDS, INITIAL_QUALITY_PROTOCOLS } from '../constants';
+import { Material, Task, TaskYield, TaskToolYield, Tool, Project, BudgetItem, ImportResult, LaborCategory, ProjectTemplate, Snapshot, Reception, Subcontractor, Contract, Certification, CalendarPreset, ProjectDocument, MeasurementSheet, Crew, TaskCrewYield, TaskLaborYield, QualityProtocol, QualityInspection, NonConformity } from '../types';
+import { INITIAL_MATERIALS, INITIAL_TASKS, INITIAL_YIELDS, INITIAL_PROJECT, INITIAL_TOOLS, INITIAL_TOOL_YIELDS, INITIAL_LABOR_CATEGORIES, INITIAL_RUBROS, INITIAL_CALENDAR_PRESETS, INITIAL_CREWS, INITIAL_CREW_YIELDS, INITIAL_QUALITY_PROTOCOLS, RUBRO_PRESETS } from '../constants';
 import { useAuth } from './AuthContext';
 import { usePersistentState } from '../hooks/usePersistentState';
 
@@ -21,8 +21,10 @@ interface ERPContextType {
   toolYields: TaskToolYield[];
   laborCategories: LaborCategory[];
   rubros: string[];
+  rubroPresets: Record<string, Partial<Task>[]>;
   crews: Crew[];
   taskCrewYields: TaskCrewYield[];
+  taskLaborYields: TaskLaborYield[];
   
   // Project Management
   project: Project; // The Active Project
@@ -57,6 +59,7 @@ interface ERPContextType {
   yieldsIndex: Record<string, TaskYield[]>; 
   toolYieldsIndex: Record<string, TaskToolYield[]>; 
   taskCrewYieldsIndex: Record<string, TaskCrewYield[]>; 
+  taskLaborYieldsIndex: Record<string, TaskLaborYield[]>;
   
   // Actions
   addMaterial: (m: Material) => void;
@@ -82,6 +85,8 @@ interface ERPContextType {
 
   addRubro: (name: string) => void;
   removeRubro: (name: string) => void;
+  addRubroPreset: (rubro: string, task: Partial<Task>) => void;
+  removeRubroPreset: (rubro: string, taskName: string) => void;
 
   updateProjectSettings: (p: Partial<Project>) => void;
   addBudgetItem: (item: BudgetItem) => void;
@@ -95,6 +100,8 @@ interface ERPContextType {
   removeTaskToolYield: (taskId: string, toolId: string) => void;
   addTaskCrewYield: (crewYieldData: TaskCrewYield) => void;
   removeTaskCrewYield: (taskId: string, crewId: string) => void;
+  addTaskLaborYield: (laborYieldData: TaskLaborYield) => void;
+  removeTaskLaborYield: (taskId: string, laborCategoryId: string) => void;
   
   loadTemplate: (template: ProjectTemplate) => void;
   importData: (type: 'materials' | 'tasks' | 'tools' | 'labor', jsonData: string) => ImportResult;
@@ -158,7 +165,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [yields, setYields] = usePersistentState<TaskYield[]>('erp_yields', INITIAL_YIELDS);
   const [toolYields, setToolYields] = usePersistentState<TaskToolYield[]>('erp_tool_yields', INITIAL_TOOL_YIELDS);
   const [taskCrewYields, setTaskCrewYields] = usePersistentState<TaskCrewYield[]>('erp_crew_yields', INITIAL_CREW_YIELDS);
+  const [taskLaborYields, setTaskLaborYields] = usePersistentState<TaskLaborYield[]>('erp_labor_yields', []);
   const [rubros, setRubros] = usePersistentState<string[]>('erp_rubros', INITIAL_RUBROS);
+  const [rubroPresets, setRubroPresets] = usePersistentState<Record<string, Partial<Task>[]>>('erp_rubro_presets', RUBRO_PRESETS);
   const [calendarPresets, setCalendarPresets] = usePersistentState<CalendarPreset[]>('erp_calendar_presets', INITIAL_CALENDAR_PRESETS);
   
   // New Tables Data
@@ -252,6 +261,15 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return index;
   }, [taskCrewYields]);
 
+  const taskLaborYieldsIndex = useMemo(() => {
+    const index: Record<string, TaskLaborYield[]> = {};
+    taskLaborYields.forEach(y => {
+      if(!index[y.taskId]) index[y.taskId] = [];
+      index[y.taskId].push(y);
+    });
+    return index;
+  }, [taskLaborYields]);
+
 
   // --- ACTIONS (Inject OrgId) ---
 
@@ -294,6 +312,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               return [...others, ...updates.laborYield!];
           });
       }
+
+      // Individual Labor Sync
+      if (updates.laborIndividualYield) {
+          setTaskLaborYields(prev => {
+              const others = prev.filter(y => y.taskId !== taskId);
+              return [...others, ...updates.laborIndividualYield!];
+          });
+      }
   };
 
   const removeTask = (id: string) => setAllTasks(prev => prev.filter(t => t.id !== id));
@@ -315,6 +341,20 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   
   const addRubro = (name: string) => setRubros(prev => [...prev, name].sort());
   const removeRubro = (name: string) => setRubros(prev => prev.filter(r => r !== name));
+
+  const addRubroPreset = (rubro: string, task: Partial<Task>) => {
+      setRubroPresets(prev => ({
+          ...prev,
+          [rubro]: [...(prev[rubro] || []), task]
+      }));
+  };
+
+  const removeRubroPreset = (rubro: string, taskName: string) => {
+      setRubroPresets(prev => ({
+          ...prev,
+          [rubro]: (prev[rubro] || []).filter(t => t.name !== taskName)
+      }));
+  };
 
   // --- PROJECT ACTIONS ---
   const setActiveProject = (id: string) => {
@@ -410,6 +450,18 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const removeTaskCrewYield = (taskId: string, crewId: string) => setTaskCrewYields(prev => prev.filter(i => !(i.taskId === taskId && i.crewId === crewId)));
+
+  const addTaskLaborYield = (y: TaskLaborYield) => {
+    setTaskLaborYields(prev => {
+        const exists = prev.some(i => i.taskId === y.taskId && i.laborCategoryId === y.laborCategoryId);
+        if (exists) {
+            return prev.map(i => (i.taskId === y.taskId && i.laborCategoryId === y.laborCategoryId) ? y : i);
+        }
+        return [...prev, y];
+    });
+  };
+
+  const removeTaskLaborYield = (taskId: string, laborCategoryId: string) => setTaskLaborYields(prev => prev.filter(i => !(i.taskId === taskId && i.laborCategoryId === laborCategoryId)));
 
   const loadTemplate = (template: ProjectTemplate) => {
     const newTasks: Task[] = [];
@@ -521,6 +573,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               yields,
               toolYields,
               taskCrewYields,
+              taskLaborYields,
               rubros,
               calendarPresets,
               allDocuments,
@@ -548,6 +601,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               setYields(db.data.yields || []);
               setToolYields(db.data.toolYields || []);
               setTaskCrewYields(db.data.taskCrewYields || []);
+              setTaskLaborYields(db.data.taskLaborYields || []);
               setRubros(db.data.rubros || INITIAL_RUBROS);
               setCalendarPresets(db.data.calendarPresets || []);
               setAllDocuments(db.data.allDocuments || []);
@@ -650,20 +704,20 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   return (
     <ERPContext.Provider value={{
-      materials, tasks, yields, tools, toolYields, laborCategories, crews, rubros, project, projects, activeProjectId,
-      snapshots, receptions, subcontractors, contracts, certifications, calendarPresets, documents, measurementSheets, taskCrewYields,
+      materials, tasks, yields, tools, toolYields, laborCategories, crews, rubros, rubroPresets, project, projects, activeProjectId,
+      snapshots, receptions, subcontractors, contracts, certifications, calendarPresets, documents, measurementSheets, taskCrewYields, taskLaborYields,
       qualityProtocols, qualityInspections, nonConformities,
       // Indexes
-      materialsMap, tasksMap, toolsMap, yieldsIndex, toolYieldsIndex, laborCategoriesMap, crewsMap, taskCrewYieldsIndex,
+      materialsMap, tasksMap, toolsMap, yieldsIndex, toolYieldsIndex, laborCategoriesMap, crewsMap, taskCrewYieldsIndex, taskLaborYieldsIndex,
       // Actions
       addMaterial, updateMaterial, removeMaterial,
       addTask, updateTask, updateTaskMaster, removeTask,
       addTool, updateTool, removeTool,
       addLaborCategory, updateLaborCategory, removeLaborCategory,
       addCrew, updateCrew, removeCrew,
-      addRubro, removeRubro,
+      addRubro, removeRubro, addRubroPreset, removeRubroPreset,
       updateProjectSettings, addBudgetItem, removeBudgetItem, updateBudgetItem,
-      addTaskYield, removeTaskYield, addTaskToolYield, removeTaskToolYield, addTaskCrewYield, removeTaskCrewYield,
+      addTaskYield, removeTaskYield, addTaskToolYield, removeTaskToolYield, addTaskCrewYield, removeTaskCrewYield, addTaskLaborYield, removeTaskLaborYield,
       loadTemplate, importData, createSnapshot, resetData,
       exportDatabase, importDatabase,
       addReception, getProjectStockStatus,

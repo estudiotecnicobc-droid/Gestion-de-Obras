@@ -4,9 +4,9 @@ import { calculateUnitPrice } from '../services/calculationService';
 import { 
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCcw, 
   Database, Wrench, Package, ListChecks, Plus, Trash2, Edit2, Save, X, Users, Clock, BarChart3, Tags, ClipboardCopy, ArrowRight, Calculator, FileSpreadsheet, Settings, Hammer, AlertCircle, HardHat, Info, Printer, PieChart as PieChartIcon, Activity,
-  ZoomOut, ZoomIn, DollarSign, Percent, LayoutGrid, Truck, CheckSquare, Square, Check, Bot, Sparkles, TrendingUp, Search, Download, ShieldCheck, ChevronDown, ChevronRight
+  ZoomOut, ZoomIn, DollarSign, Percent, LayoutGrid, Truck, CheckSquare, Square, Check, Bot, Sparkles, TrendingUp, Search, Download, ShieldCheck, ChevronDown, ChevronRight, ArrowUp, ArrowDown
 } from 'lucide-react';
-import { INITIAL_MATERIALS, INITIAL_TOOLS, INITIAL_LABOR_CATEGORIES, RUBRO_PRESETS } from '../constants';
+import { INITIAL_MATERIALS, INITIAL_TOOLS, INITIAL_LABOR_CATEGORIES } from '../constants';
 import { Material, Task, Tool, LaborCategory, TaskYield, Crew } from '../types';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { GoogleGenAI } from "@google/genai";
@@ -15,7 +15,7 @@ const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
 export const DataAdmin: React.FC = () => {
   const { 
-    materials, tasks, tools, laborCategories, rubros, crews, project, yields, toolYields, 
+    materials, tasks, tools, laborCategories, rubros, rubroPresets, crews, project, yields, toolYields, 
     importData, resetData, updateProjectSettings,
     addMaterial, updateMaterial, removeMaterial,
     addTask, updateTask, removeTask,
@@ -28,13 +28,25 @@ export const DataAdmin: React.FC = () => {
     // Database Management
     exportDatabase, importDatabase,
     // Indexes
-    yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, laborCategoriesMap, taskCrewYieldsIndex, crewsMap
+    yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, laborCategoriesMap, taskCrewYieldsIndex, crewsMap, taskLaborYieldsIndex
   } = useERP();
   
   const [activeSubTab, setActiveSubTab] = useState<'materials' | 'tasks' | 'tools' | 'labor' | 'rubros' | 'apu' | 'crews' | 'system'>('materials');
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
+  
+  // Task Filtering & Sorting State
+  const [taskFilterCategory, setTaskFilterCategory] = useState<string>('ALL');
+  const [taskSortOrder, setTaskSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // APU Filtering & Sorting State
+  const [apuFilterCategory, setApuFilterCategory] = useState<string>('ALL');
+  const [apuSortOrder, setApuSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // Material Filtering & Sorting State
+  const [materialFilterCategory, setMaterialFilterCategory] = useState<string>('ALL');
+  const [materialSortOrder, setMaterialSortOrder] = useState<'asc' | 'desc'>('asc');
   
   // Bulk Selection State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -104,14 +116,64 @@ export const DataAdmin: React.FC = () => {
 
   // --- Helper: Get Current List ---
   const currentList = useMemo(() => {
-      if (activeSubTab === 'materials') return materials;
-      if (activeSubTab === 'tasks' || activeSubTab === 'apu') return tasks;
-      if (activeSubTab === 'tools') return tools;
-      if (activeSubTab === 'labor') return laborCategories;
-      if (activeSubTab === 'crews') return crews;
-      if (activeSubTab === 'rubros') return rubros;
-      return [];
-  }, [activeSubTab, materials, tasks, tools, laborCategories, crews, rubros]);
+      let list: any[] = [];
+      if (activeSubTab === 'materials') list = materials;
+      else if (activeSubTab === 'tasks' || activeSubTab === 'apu') list = tasks;
+      else if (activeSubTab === 'tools') list = tools;
+      else if (activeSubTab === 'labor') list = laborCategories;
+      else if (activeSubTab === 'crews') list = crews;
+      else if (activeSubTab === 'rubros') list = rubros;
+      
+      // Apply Task Filters & Sorting
+      if (activeSubTab === 'tasks') {
+          if (taskFilterCategory !== 'ALL') {
+              list = list.filter((t: any) => t.category === taskFilterCategory);
+          }
+          
+          // Create a copy to sort
+          list = [...list].sort((a: any, b: any) => {
+              const nameA = (a.name || '').toLowerCase();
+              const nameB = (b.name || '').toLowerCase();
+              if (nameA < nameB) return taskSortOrder === 'asc' ? -1 : 1;
+              if (nameA > nameB) return taskSortOrder === 'asc' ? 1 : -1;
+              return 0;
+          });
+      }
+
+      // Apply APU Filters & Sorting
+      if (activeSubTab === 'apu') {
+          if (apuFilterCategory !== 'ALL') {
+              list = list.filter((t: any) => t.category === apuFilterCategory);
+          }
+          
+          // Create a copy to sort
+          list = [...list].sort((a: any, b: any) => {
+              const nameA = (a.name || '').toLowerCase();
+              const nameB = (b.name || '').toLowerCase();
+              if (nameA < nameB) return apuSortOrder === 'asc' ? -1 : 1;
+              if (nameA > nameB) return apuSortOrder === 'asc' ? 1 : -1;
+              return 0;
+          });
+      }
+
+      // Apply Material Filters & Sorting
+      if (activeSubTab === 'materials') {
+          if (materialFilterCategory !== 'ALL') {
+              list = list.filter((m: any) => m.category === materialFilterCategory);
+          }
+          
+          // Create a copy to sort
+          list = [...list].sort((a: any, b: any) => {
+              const nameA = (a.name || '').toLowerCase();
+              const nameB = (b.name || '').toLowerCase();
+              if (nameA < nameB) return materialSortOrder === 'asc' ? -1 : 1;
+              if (nameA > nameB) return materialSortOrder === 'asc' ? 1 : -1;
+              return 0;
+          });
+      }
+      
+      return list;
+  }, [activeSubTab, materials, tasks, tools, laborCategories, crews, rubros, taskFilterCategory, taskSortOrder, apuFilterCategory, apuSortOrder, materialFilterCategory, materialSortOrder]);
 
   // --- Bulk Actions ---
   const toggleSelectAll = () => {
@@ -337,7 +399,7 @@ export const DataAdmin: React.FC = () => {
   // --- APU Editor Helpers ---
   const apuAnalysis = useMemo(() => {
     if (!localTask) return null;
-    return calculateUnitPrice(localTask, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+    return calculateUnitPrice(localTask, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
   }, [localTask, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap]);
 
   const currentAPUMaterials = useMemo(() => {
@@ -917,6 +979,48 @@ export const DataAdmin: React.FC = () => {
             {activeSubTab === 'crews' && `Configuración de Cuadrillas (${crews.length})`}
             {activeSubTab === 'rubros' && `Rubros Configurados (${rubros.length})`}
           </h3>
+          {activeSubTab === 'tasks' && (
+              <div className="flex items-center gap-2 mr-2">
+                  <select 
+                      className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium text-slate-600 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                      value={taskFilterCategory}
+                      onChange={(e) => setTaskFilterCategory(e.target.value)}
+                  >
+                      <option value="ALL">Todas las Categorías</option>
+                      {rubros.map(r => (
+                          <option key={r} value={r}>{r}</option>
+                      ))}
+                  </select>
+              </div>
+          )}
+          {activeSubTab === 'apu' && (
+              <div className="flex items-center gap-2 mr-2">
+                  <select 
+                      className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium text-slate-600 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                      value={apuFilterCategory}
+                      onChange={(e) => setApuFilterCategory(e.target.value)}
+                  >
+                      <option value="ALL">Todas las Categorías</option>
+                      {rubros.map(r => (
+                          <option key={r} value={r}>{r}</option>
+                      ))}
+                  </select>
+              </div>
+          )}
+          {activeSubTab === 'materials' && (
+              <div className="flex items-center gap-2 mr-2">
+                  <select 
+                      className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium text-slate-600 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                      value={materialFilterCategory}
+                      onChange={(e) => setMaterialFilterCategory(e.target.value)}
+                  >
+                      <option value="ALL">Todas las Categorías</option>
+                      {Array.from(new Set(materials.map(m => m.category).filter(Boolean))).sort().map(c => (
+                          <option key={c} value={c}>{c}</option>
+                      ))}
+                  </select>
+              </div>
+          )}
           {activeSubTab !== 'apu' && (
             <button 
                 onClick={() => { 
@@ -946,7 +1050,31 @@ export const DataAdmin: React.FC = () => {
                         onChange={toggleSelectAll}
                     />
                 </th>
-                <th className="p-4 text-xs font-semibold text-slate-500">{activeSubTab === 'labor' || activeSubTab === 'rubros' ? 'Nombre / Descripción' : 'Nombre / Identificador'}</th>
+                <th 
+                    className={`p-4 text-xs font-semibold text-slate-500 ${(activeSubTab === 'tasks' || activeSubTab === 'apu' || activeSubTab === 'materials') ? 'cursor-pointer hover:text-blue-600 select-none' : ''}`}
+                    onClick={() => {
+                        if (activeSubTab === 'tasks') {
+                            setTaskSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                        } else if (activeSubTab === 'apu') {
+                            setApuSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                        } else if (activeSubTab === 'materials') {
+                            setMaterialSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                        }
+                    }}
+                >
+                    <div className="flex items-center gap-1">
+                        {activeSubTab === 'labor' || activeSubTab === 'rubros' ? 'Nombre / Descripción' : 'Nombre / Identificador'}
+                        {activeSubTab === 'tasks' && (
+                            taskSortOrder === 'asc' ? <ArrowDown size={14} /> : <ArrowUp size={14} />
+                        )}
+                        {activeSubTab === 'apu' && (
+                            apuSortOrder === 'asc' ? <ArrowDown size={14} /> : <ArrowUp size={14} />
+                        )}
+                        {activeSubTab === 'materials' && (
+                            materialSortOrder === 'asc' ? <ArrowDown size={14} /> : <ArrowUp size={14} />
+                        )}
+                    </div>
+                </th>
                 
                 {activeSubTab !== 'labor' && activeSubTab !== 'rubros' && activeSubTab !== 'crews' && <th className="p-4 text-xs font-semibold text-slate-500">Categoría</th>}
                 
@@ -1025,12 +1153,12 @@ export const DataAdmin: React.FC = () => {
                 // Calculate APU if needed (Now also for TASKS to show dynamic labor cost)
                 let apu = null;
                 if (activeSubTab === 'apu' || activeSubTab === 'tasks') {
-                    apu = calculateUnitPrice(item, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+                    apu = calculateUnitPrice(item, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
                 }
 
                 // NEW: Rubro Expansion Logic
                 const isExpanded = activeSubTab === 'rubros' && expandedRubro === item;
-                const presetTasks = activeSubTab === 'rubros' ? RUBRO_PRESETS[item] || [] : [];
+                const presetTasks = activeSubTab === 'rubros' ? rubroPresets[item] || [] : [];
 
                 return (
                 <React.Fragment key={itemId}>
@@ -1954,7 +2082,7 @@ export const DataAdmin: React.FC = () => {
                                     </thead>
                                     <tbody>
                                         {tasks.map((t, i) => {
-                                            const analysis = calculateUnitPrice(t, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+                                            const analysis = calculateUnitPrice(t, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
                                             return (
                                                 <tr key={t.id} className="border-b last:border-0 break-inside-avoid">
                                                     <td className="p-2 border-r">{t.name}</td>

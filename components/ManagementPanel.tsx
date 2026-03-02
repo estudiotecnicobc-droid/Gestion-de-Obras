@@ -11,7 +11,11 @@ import {
 } from 'lucide-react';
 
 export const ManagementPanel: React.FC = () => {
-  const { project, tasks, materials, yields, tools, toolYields, snapshots, receptions, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap } = useERP();
+  const { 
+    project, tasks, materials, yields, tools, toolYields, snapshots, receptions, 
+    yieldsIndex, materialsMap, toolYieldsIndex, toolsMap,
+    taskCrewYieldsIndex, crewsMap, laborCategoriesMap, taskLaborYieldsIndex
+  } = useERP();
   
   // --- States for Certificate Preview ---
   const [showCertPreview, setShowCertPreview] = useState(false);
@@ -38,7 +42,7 @@ export const ManagementPanel: React.FC = () => {
       project.items.forEach(item => {
           const task = tasks.find(t => t.id === item.taskId);
           if (!task) return;
-          const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap);
+          const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
           const itemTotalBudget = analysis.totalUnitCost * item.quantity;
           
           // BAC
@@ -83,7 +87,7 @@ export const ManagementPanel: React.FC = () => {
       project.items.forEach(item => {
           const task = tasks.find(t => t.id === item.taskId);
           if (task) {
-              const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap);
+              const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
               const nonMatCost = (analysis.laborCost + analysis.toolCost) * item.quantity;
               evLaborAndTools += nonMatCost * ((item.progress || 0) / 100);
           }
@@ -169,7 +173,7 @@ export const ManagementPanel: React.FC = () => {
       const rawItems = project.items.map(item => {
           const task = tasks.find(t => t.id === item.taskId);
           if (!task) return null;
-          const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap);
+          const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
           const totalCost = analysis.totalUnitCost * item.quantity;
           return {
               id: item.id,
@@ -263,7 +267,7 @@ export const ManagementPanel: React.FC = () => {
   const certificateData = useMemo(() => {
       return project.items.map(item => {
           const task = tasks.find(t => t.id === item.taskId);
-          const analysis = task ? calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap) : { totalUnitCost: 0 };
+          const analysis = task ? calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex) : { totalUnitCost: 0 };
           const totalAmount = analysis.totalUnitCost * item.quantity;
           const progress = item.progress || 0;
           const amountDone = totalAmount * (progress / 100);
@@ -294,7 +298,7 @@ export const ManagementPanel: React.FC = () => {
       const baseCrews = budgetItem.crewsAssigned || 1;
       const baseYield = task.dailyYield * baseCrews;
       const normalDuration = Math.ceil(budgetItem.quantity / baseYield);
-      const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap);
+      const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
       const normalCost = analysis.totalUnitCost * budgetItem.quantity;
 
       // Crash Simulation Points (Curve Points)

@@ -1,11 +1,11 @@
 
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { addWorkingDays, diffDays, addDays } from '../services/calculationService';
+import { addWorkingDays, diffDays, addDays, calculateUnitPrice } from '../services/calculationService';
 import { 
   Calendar, Clock, AlertCircle, ArrowDown, Calculator, 
   ChevronsRight, Users, Check, Layout, List, PenTool,
-  ZoomIn, ZoomOut, MoveRight
+  ZoomIn, ZoomOut, MoveRight, Sidebar, Download, Printer, FileText, ChevronLeft, ChevronRight, DollarSign
 } from 'lucide-react';
 import { LinkType } from '../types';
 import { APUBuilder } from './APUBuilder';
@@ -13,6 +13,8 @@ import { APUBuilder } from './APUBuilder';
 export const Planning: React.FC = () => {
   const { 
     project, tasks, updateBudgetItem,
+    yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, 
+    taskCrewYieldsIndex, crewsMap, laborCategoriesMap
   } = useERP();
   
   // --- UI STATE ---
@@ -20,8 +22,25 @@ export const Planning: React.FC = () => {
   const [editingApuId, setEditingApuId] = useState<string | null>(null);
   
   // Gantt Specific State
+  const [timeScale, setTimeScale] = useState<'day' | 'week' | 'month' | 'quarter' | 'project'>('day');
+  const [showSidebar, setShowSidebar] = useState(true);
   const [ganttScale, setGanttScale] = useState(40); // Pixels per day
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Collapsed Summaries State
+  const [collapsedSummaries, setCollapsedSummaries] = useState<Set<string>>(new Set());
+
+  const toggleSummary = (summaryId: string) => {
+    setCollapsedSummaries(prev => {
+      const next = new Set(prev);
+      if (next.has(summaryId)) {
+        next.delete(summaryId);
+      } else {
+        next.add(summaryId);
+      }
+      return next;
+    });
+  };
 
   // Working Days Config
   const workingDays = project.workingDays || [1,2,3,4,5]; 
@@ -47,6 +66,19 @@ export const Planning: React.FC = () => {
         const quantity = item.quantity || 0;
         const crewSize = item.crewsAssigned || 1; 
         const dailyCapacity = task.dailyYield * crewSize;
+        
+        // Cost Calculation
+        const analysis = calculateUnitPrice(
+            task, 
+            yieldsIndex, 
+            materialsMap, 
+            toolYieldsIndex, 
+            toolsMap, 
+            taskCrewYieldsIndex, 
+            crewsMap, 
+            laborCategoriesMap
+        );
+        const totalCost = (analysis.totalUnitCost || 0) * quantity;
         
         // Duration Calculation
         const calculatedDuration = dailyCapacity > 0 ? Math.ceil(quantity / dailyCapacity) : 1;
@@ -88,6 +120,7 @@ export const Planning: React.FC = () => {
           yieldHH: task.yieldHH || 0,
           dailyCapacity,
           crewSize,
+          totalCost,
           // Temp fields for CPM
           earlyStart: new Date(startDate).getTime(),
           earlyFinish: new Date(endDate).getTime()
@@ -100,7 +133,7 @@ export const Planning: React.FC = () => {
     }
     
     return results.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-  }, [project, tasks, workingDays, nonWorkingDates, workdayHours]);
+  }, [project, tasks, workingDays, nonWorkingDates, workdayHours, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap]);
 
   // --- 2. CRITICAL PATH METHOD (BACKWARD PASS) ---
   const cpmItems = useMemo(() => {
@@ -168,8 +201,58 @@ export const Planning: React.FC = () => {
           node.isCritical = node.totalFloat < 0.9;
       });
 
-      return Array.from(itemMap.values()).sort((a, b) => a.earlyStart - b.earlyStart);
+      // Sort by original Index (ID) to maintain WBS structure like MS Project
+      return Array.from(itemMap.values()).sort((a, b) => a.index - b.index);
   }, [scheduledItems]);
+
+  // --- GANTT ITEMS (WITH SUMMARIES) ---
+  const ganttItems = useMemo(() => {
+      if (cpmItems.length === 0) return [];
+
+      // Group by Category
+      const grouped: Record<string, typeof cpmItems> = {};
+      const categories: string[] = []; 
+
+      cpmItems.forEach(item => {
+          const cat = item.category || 'Sin Categoría';
+          if (!grouped[cat]) {
+              grouped[cat] = [];
+              categories.push(cat);
+          }
+          grouped[cat].push(item);
+      });
+
+      const results: any[] = [];
+      
+      categories.forEach(cat => {
+          const items = grouped[cat];
+          const start = Math.min(...items.map(i => i.earlyStart));
+          const end = Math.max(...items.map(i => i.earlyFinish));
+          const duration = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+          const totalCost = items.reduce((sum, i) => sum + (i.totalCost || 0), 0);
+          const summaryId = `summary-${cat}`;
+
+          results.push({
+              id: summaryId,
+              taskId: summaryId,
+              taskName: cat,
+              type: 'summary',
+              start: new Date(start).toISOString().split('T')[0],
+              end: new Date(end).toISOString().split('T')[0],
+              duration,
+              totalCost,
+              earlyStart: start,
+              earlyFinish: end,
+              isCritical: items.some(i => i.isCritical)
+          });
+          
+          if (!collapsedSummaries.has(summaryId)) {
+              results.push(...items);
+          }
+      });
+
+      return results;
+  }, [cpmItems, collapsedSummaries]);
 
   // --- CRITICAL PATH SUMMARY ---
   const criticalPathStats = useMemo(() => {
@@ -180,6 +263,118 @@ export const Planning: React.FC = () => {
       const totalDays = diffDays(project.startDate, finishDate.toISOString().split('T')[0]);
       return { finishDate, totalDays };
   }, [cpmItems, project.startDate]);
+
+  // --- GANTT CONFIGURATION ---
+  useEffect(() => {
+      // Auto-adjust scale based on selected time mode
+      switch (timeScale) {
+          case 'day': setGanttScale(40); break;
+          case 'week': setGanttScale(15); break;
+          case 'month': setGanttScale(5); break;
+          case 'quarter': setGanttScale(2); break;
+          case 'project': 
+              // Calculate scale to fit container
+              if (scrollContainerRef.current && criticalPathStats.totalDays > 0) {
+                  const width = scrollContainerRef.current.clientWidth - 50; // padding
+                  setGanttScale(Math.max(1, width / criticalPathStats.totalDays));
+              }
+              break;
+      }
+  }, [timeScale, criticalPathStats.totalDays]);
+
+  const ganttHeaders = useMemo(() => {
+      const months: any[] = [];
+      const weeks: any[] = [];
+      const totalDays = criticalPathStats.totalDays + 45; // Buffer
+      const startDate = new Date(project.startDate);
+      
+      // Helper to get days diff
+      const getDiff = (d1: Date, d2: Date) => Math.floor((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24));
+
+      // 1. Months (Top Row)
+      let curr = new Date(startDate);
+      // Align to first day of month? No, project starts at specific date.
+      // We iterate from project start, finding month boundaries.
+      let offset = 0;
+      
+      // First partial month
+      let y = curr.getFullYear();
+      let m = curr.getMonth();
+      let nextMonth = new Date(y, m + 1, 1);
+      
+      while (offset < totalDays) {
+          const daysInSegment = getDiff(curr, nextMonth);
+          // If segment goes beyond totalDays, clamp it
+          const width = Math.min(daysInSegment, totalDays - offset);
+          
+          if (width > 0) {
+              months.push({
+                  label: curr.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }),
+                  x: offset * ganttScale,
+                  width: width * ganttScale
+              });
+          }
+          
+          offset += width;
+          curr = nextMonth;
+          y = curr.getFullYear();
+          m = curr.getMonth();
+          nextMonth = new Date(y, m + 1, 1);
+      }
+
+      // 2. Weeks (Bottom Row)
+      // Simple 7-day chunks relative to start for now, labeled with date
+      for (let i = 0; i < totalDays; i += 7) {
+          const d = new Date(startDate);
+          d.setDate(d.getDate() + i);
+          const label = d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+          
+          weeks.push({
+              label,
+              x: i * ganttScale,
+              width: 7 * ganttScale
+          });
+      }
+
+      return { months, weeks };
+  }, [timeScale, ganttScale, criticalPathStats.totalDays, project.startDate]);
+
+  // --- EXPORT HANDLERS ---
+  const handleExportProject = () => {
+      // Generate MS Project XML (Simplified)
+      let xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project xmlns="http://schemas.microsoft.com/project">
+<Name>${project.name}</Name>
+<StartDate>${project.startDate}T08:00:00</StartDate>
+<Tasks>`;
+      
+      cpmItems.forEach((item, idx) => {
+          xml += `
+    <Task>
+        <UID>${idx + 1}</UID>
+        <ID>${idx + 1}</ID>
+        <Name>${item.taskName}</Name>
+        <Start>${item.start}T08:00:00</Start>
+        <Finish>${item.end}T17:00:00</Finish>
+        <Duration>PT${item.duration * 8}H0M0S</Duration>
+    </Task>`;
+      });
+
+      xml += `
+</Tasks>
+</Project>`;
+
+      const blob = new Blob([xml], { type: 'application/xml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${project.name || 'proyecto'}_gantt.xml`;
+      a.click();
+  };
+
+  const handlePrint = () => {
+      window.print();
+  };
 
   // --- HANDLERS ---
   const handleUpdate = (id: string, field: string, value: any) => {
@@ -218,33 +413,62 @@ export const Planning: React.FC = () => {
       {/* Main Content */}
       <div className="flex-1 bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
           
-          <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-slate-50">
+          <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-slate-50 print:hidden">
               <div className="flex gap-2">
                   <button 
                     onClick={() => setViewMode('table')}
                     className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${viewMode === 'table' ? 'bg-white text-blue-600 shadow' : 'text-slate-500 hover:bg-slate-200'}`}
                   >
-                      <List size={16} /> Tabla de Cálculo
+                      <List size={16} /> Tabla
                   </button>
                   <button 
                     onClick={() => setViewMode('gantt')}
                     className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${viewMode === 'gantt' ? 'bg-white text-blue-600 shadow' : 'text-slate-500 hover:bg-slate-200'}`}
                   >
-                      <Layout size={16} /> Diagrama Gantt
+                      <Layout size={16} /> Gantt
                   </button>
               </div>
               
               {viewMode === 'gantt' && (
-                  <div className="flex items-center gap-2 bg-white rounded-lg p-1 border border-slate-200">
-                      <button onClick={() => setGanttScale(s => Math.max(20, s - 5))} className="p-1 hover:bg-slate-100 rounded text-slate-500"><ZoomOut size={16}/></button>
-                      <span className="text-xs font-mono w-8 text-center">{ganttScale}</span>
-                      <button onClick={() => setGanttScale(s => Math.min(100, s + 5))} className="p-1 hover:bg-slate-100 rounded text-slate-500"><ZoomIn size={16}/></button>
+                  <div className="flex items-center gap-4">
+                      {/* Time Scale Selector */}
+                      <div className="flex bg-white rounded-lg border border-slate-200 p-1">
+                          {(['day', 'week', 'month', 'quarter', 'project'] as const).map(mode => (
+                              <button
+                                  key={mode}
+                                  onClick={() => setTimeScale(mode)}
+                                  className={`px-3 py-1 text-[10px] uppercase font-bold rounded ${timeScale === mode ? 'bg-blue-100 text-blue-700' : 'text-slate-500 hover:bg-slate-50'}`}
+                              >
+                                  {mode === 'day' ? 'Día' : mode === 'week' ? 'Sem' : mode === 'month' ? 'Mes' : mode === 'quarter' ? 'Trim' : 'Todo'}
+                              </button>
+                          ))}
+                      </div>
+
+                      {/* Zoom Controls */}
+                      <div className="flex items-center gap-2 bg-white rounded-lg p-1 border border-slate-200">
+                          <button onClick={() => setGanttScale(s => Math.max(1, s * 0.8))} className="p-1 hover:bg-slate-100 rounded text-slate-500"><ZoomOut size={16}/></button>
+                          <button onClick={() => setGanttScale(s => Math.min(200, s * 1.2))} className="p-1 hover:bg-slate-100 rounded text-slate-500"><ZoomIn size={16}/></button>
+                      </div>
+
+                      {/* Export Actions */}
+                      <div className="flex items-center gap-2">
+                          <button onClick={handleExportProject} className="p-2 bg-white border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-200 rounded-lg transition-colors" title="Exportar a MS Project (XML)">
+                              <Download size={16} />
+                          </button>
+                          <button onClick={handlePrint} className="p-2 bg-white border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-200 rounded-lg transition-colors" title="Imprimir / PDF">
+                              <Printer size={16} />
+                          </button>
+                      </div>
+
+                      <button 
+                          onClick={() => setShowSidebar(!showSidebar)}
+                          className={`p-2 rounded-lg transition-colors ${showSidebar ? 'bg-blue-50 text-blue-600' : 'bg-white text-slate-400 border border-slate-200'}`}
+                          title="Panel Lateral"
+                      >
+                          <Sidebar size={16} />
+                      </button>
                   </div>
               )}
-
-              <div className="text-xs text-slate-500 font-medium">
-                  Jornada: <strong>{workdayHours}hs</strong>
-              </div>
           </div>
 
           {viewMode === 'table' ? (
@@ -261,13 +485,30 @@ export const Planning: React.FC = () => {
                               <th className="p-3 border-r border-slate-200 w-24 text-center font-black text-slate-700">Duración (Días)</th>
                               <th className="p-3 border-r border-slate-200 w-40 text-center">Precedencia</th>
                               <th className="p-3 border-r border-slate-200 w-28 text-center">Fecha Inicio</th>
-                              <th className="p-3 w-28 text-center">Fecha Fin</th>
+                              <th className="p-3 border-r border-slate-200 w-28 text-center">Fecha Fin</th>
+                              <th className="p-3 w-32 text-right bg-emerald-50/50 font-bold text-emerald-700">Costo Total</th>
                           </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-xs">
-                          {cpmItems.map((item, idx) => (
+                          {ganttItems.map((item, idx) => {
+                              if (item.type === 'summary') {
+                                  return (
+                                      <tr key={item.id} className="bg-slate-100 font-bold text-slate-700">
+                                          <td className="p-2 text-center text-slate-400"></td>
+                                          <td className="p-2" colSpan={5}>{item.taskName}</td>
+                                          <td className="p-2 text-center">{item.duration}</td>
+                                          <td className="p-2"></td>
+                                          <td className="p-2 text-center">{new Date(item.start).toLocaleDateString()}</td>
+                                          <td className="p-2 text-center">{new Date(item.end).toLocaleDateString()}</td>
+                                          <td className="p-2 text-right font-mono text-emerald-700">
+                                              ${(item.totalCost || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                          </td>
+                                      </tr>
+                                  );
+                              }
+                              return (
                               <tr key={item.id} className={`hover:bg-slate-50 transition-colors group ${item.isCritical ? 'bg-red-50/30' : ''}`}>
-                                  <td className="p-2 text-center text-slate-400 font-mono">{idx + 1}</td>
+                                  <td className="p-2 text-center text-slate-400 font-mono">{item.index}</td>
                                   <td className="p-2 font-medium text-slate-700 flex items-center justify-between">
                                       <div className="flex items-center gap-2">
                                           {item.isCritical && <AlertCircle size={12} className="text-red-500" />}
@@ -343,128 +584,273 @@ export const Planning: React.FC = () => {
                                   <td className="p-2 text-center font-bold text-slate-700">
                                       {new Date(item.end).toLocaleDateString()}
                                   </td>
+                                  
+                                  {/* CALC: Total Cost */}
+                                  <td className="p-2 text-right font-mono text-emerald-600 bg-emerald-50/30 font-medium">
+                                      ${(item.totalCost || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                  </td>
                               </tr>
-                          ))}
+                              );
+                          })}
                       </tbody>
                   </table>
               </div>
           ) : (
               // --- GANTT CHART RENDERER ---
-              <div className="flex-1 overflow-auto bg-slate-50 relative" ref={scrollContainerRef}>
-                  <div className="absolute top-0 left-0 min-w-full h-full">
-                      {/* SVG Canvas */}
-                      <svg 
-                          width={Math.max(1000, criticalPathStats.totalDays * ganttScale + 400)} 
-                          height={cpmItems.length * 40 + 60}
-                          className="font-sans"
-                      >
-                          <defs>
-                              <pattern id="grid" width={ganttScale} height="100%" patternUnits="userSpaceOnUse">
-                                  <line x1={ganttScale} y1="0" x2={ganttScale} y2="100%" stroke="#e2e8f0" strokeWidth="1" />
-                              </pattern>
-                              <marker id="arrowhead" markerWidth="6" markerHeight="4" refX="0" refY="2" orient="auto">
-                                  <polygon points="0 0, 6 2, 0 4" fill="#94a3b8" />
-                              </marker>
-                          </defs>
-
-                          {/* Background Grid */}
-                          <rect width="100%" height="100%" fill="url(#grid)" />
-
-                          {/* Timeline Header */}
-                          <g>
-                              {Array.from({ length: criticalPathStats.totalDays + 5 }).map((_, i) => (
-                                  <text 
-                                    key={i} 
-                                    x={i * ganttScale + 10} 
-                                    y="20" 
-                                    fontSize="10" 
-                                    fill="#64748b" 
-                                    fontWeight="bold"
-                                  >
-                                      D{i+1}
-                                  </text>
-                              ))}
-                          </g>
-
-                          {/* Task Bars & Logic */}
-                          {cpmItems.map((item, index) => {
-                              const projectStart = new Date(project.startDate).getTime();
-                              const itemStart = new Date(item.start).getTime();
-                              
-                              // Calculate pixel offset days
-                              const startOffsetDay = Math.floor((itemStart - projectStart) / (1000 * 60 * 60 * 24));
-                              const x = startOffsetDay * ganttScale;
-                              const width = item.duration * ganttScale;
-                              const y = index * 40 + 40;
-                              
-                              // Bar Color: Red if Critical, Blue if Normal
-                              const barColor = item.isCritical ? '#ef4444' : '#3b82f6';
-                              const barOpacity = item.isCritical ? 0.9 : 0.7;
-
-                              return (
-                                  <g key={item.id} className="group cursor-pointer" onClick={() => setEditingApuId(item.taskId)}>
-                                      {/* Dependency Lines */}
-                                      {item.dependencies?.map((dep, depIdx) => {
-                                          const pred = cpmItems.find(p => p.id === dep.predecessorId);
-                                          if (!pred) return null;
-                                          
-                                          // Find predator index/position
-                                          const predIdx = cpmItems.indexOf(pred);
-                                          const predStartDay = Math.floor((new Date(pred.start).getTime() - projectStart) / (1000 * 60 * 60 * 24));
-                                          const predXEnd = (predStartDay + pred.duration) * ganttScale;
-                                          const predY = predIdx * 40 + 40 + 15; // Center of bar
-                                          
-                                          const currY = y + 15;
-                                          
-                                          // Draw Bezier Connector
-                                          const path = `M ${predXEnd} ${predY} 
-                                                        C ${predXEnd + 15} ${predY}, ${x - 15} ${currY}, ${x} ${currY}`;
-                                          
-                                          return (
-                                              <path 
-                                                key={`${item.id}-dep-${depIdx}`} 
-                                                d={path} 
-                                                fill="none" 
-                                                stroke="#94a3b8" 
-                                                strokeWidth="1.5" 
-                                                markerEnd="url(#arrowhead)"
-                                                className="opacity-50"
-                                              />
-                                          );
-                                      })}
-
-                                      {/* Task Bar */}
-                                      <rect 
-                                          x={x} 
-                                          y={y} 
-                                          width={width} 
-                                          height="30" 
-                                          rx="4" 
-                                          fill={barColor}
-                                          fillOpacity={barOpacity}
-                                          className="transition-all hover:fill-opacity-100 hover:stroke hover:stroke-slate-600"
-                                      />
-                                      
-                                      {/* Progress Inner Bar (Mocked as solid bottom line if progress > 0) */}
-                                      {item.progress > 0 && (
-                                          <rect x={x} y={y + 25} width={width * (item.progress / 100)} height="5" fill="white" fillOpacity="0.5" />
+              <div className="flex-1 flex overflow-hidden">
+                  {/* SIDEBAR: Task List */}
+                  {showSidebar && (
+                      <div className="w-[450px] flex-shrink-0 border-r border-slate-200 bg-white overflow-y-auto flex flex-col print:hidden">
+                          <div className="h-10 bg-slate-100 border-b border-slate-200 flex items-center px-4 text-[10px] font-bold text-slate-500 uppercase sticky top-0 z-10">
+                              <div className="w-8 text-center">ID</div>
+                              <div className="flex-1 px-2">Tarea</div>
+                              <div className="w-16 text-center">Duración</div>
+                              <div className="w-20 text-center">Inicio</div>
+                              <div className="w-20 text-center">Fin</div>
+                          </div>
+                          {ganttItems.map((item, idx) => (
+                              <div 
+                                  key={item.id} 
+                                  className={`h-10 flex items-center px-4 border-b border-slate-100 hover:bg-slate-50 text-xs group cursor-pointer transition-colors ${item.type === 'summary' ? 'bg-slate-100 font-bold' : ''} ${item.isCritical && item.type !== 'summary' ? 'bg-red-50/10' : ''}`}
+                                  onClick={() => item.type !== 'summary' && setEditingApuId(item.taskId)}
+                              >
+                                  <div className="w-8 text-center text-slate-400 font-mono">{item.index || ''}</div>
+                                  <div className="flex-1 truncate font-medium text-slate-700 px-2 flex items-center gap-2" title={item.taskName}>
+                                      {item.isCritical && item.type !== 'summary' && <div className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" title="Ruta Crítica"></div>}
+                                      {item.type === 'summary' ? (
+                                          <span className="truncate uppercase text-[10px] tracking-wider">{item.taskName}</span>
+                                      ) : (
+                                          <span className="truncate pl-2">{item.taskName}</span>
                                       )}
+                                  </div>
+                                  <div className="w-16 text-center text-slate-500 font-mono">{item.duration}d</div>
+                                  <div className="w-20 text-center text-slate-500 text-[10px]">{new Date(item.start).toLocaleDateString()}</div>
+                                  <div className="w-20 text-center text-slate-500 text-[10px]">{new Date(item.end).toLocaleDateString()}</div>
+                              </div>
+                          ))}
+                      </div>
+                  )}
 
-                                      {/* Label */}
-                                      <text x={x + 10} y={y + 19} fontSize="11" fill="white" fontWeight="bold" pointerEvents="none" className="select-none">
-                                          {width > 60 ? item.taskName.substring(0, 20) : ''}
-                                      </text>
+                  {/* CHART AREA */}
+                  <div className="flex-1 overflow-auto bg-slate-50 relative print:overflow-visible" ref={scrollContainerRef}>
+                      <div className="absolute top-0 left-0 min-w-full h-full print:static">
+                          {/* SVG Canvas */}
+                          <svg 
+                              width={Math.max(1000, criticalPathStats.totalDays * ganttScale + 400)} 
+                              height={ganttItems.length * 40 + 60}
+                              className="font-sans"
+                          >
+                              <defs>
+                                  <pattern id="grid" width={ganttScale} height="100%" patternUnits="userSpaceOnUse">
+                                      <line x1={ganttScale} y1="0" x2={ganttScale} y2="100%" stroke="#e2e8f0" strokeWidth="1" />
+                                  </pattern>
+                                  <marker id="arrowhead" markerWidth="6" markerHeight="4" refX="0" refY="2" orient="auto">
+                                      <polygon points="0 0, 6 2, 0 4" fill="#94a3b8" />
+                                  </marker>
+                              </defs>
+
+                              {/* Background Grid */}
+                              <rect width="100%" height="100%" fill="url(#grid)" y="40" />
+
+                              {/* Non-Working Days Background */}
+                              {Array.from({ length: criticalPathStats.totalDays + 10 }).map((_, i) => {
+                                  // Use local time construction to ensure getDay() is correct
+                                  const currentDate = new Date(project.startDate + 'T00:00:00');
+                                  currentDate.setDate(currentDate.getDate() + i);
+                                  
+                                  const dayOfWeek = currentDate.getDay(); // 0=Sun, 6=Sat
+                                  const isWorking = workingDays.includes(dayOfWeek);
+                                  
+                                  if (!isWorking) {
+                                      return (
+                                          <rect 
+                                              key={`nw-${i}`}
+                                              x={i * ganttScale} 
+                                              y="40" 
+                                              width={ganttScale} 
+                                              height="100%" 
+                                              fill="#f1f5f9" 
+                                              fillOpacity="0.6"
+                                          />
+                                      );
+                                  }
+                                  return null;
+                              })}
+
+                              {/* Today Line */}
+                              {(() => {
+                                  const projectStart = new Date(project.startDate).getTime();
+                                  const today = new Date();
+                                  today.setHours(0,0,0,0);
+                                  const todayTime = today.getTime();
+                                  
+                                  if (todayTime >= projectStart) {
+                                      const diffTime = todayTime - projectStart;
+                                      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                                      const x = diffDays * ganttScale + (ganttScale / 2);
                                       
-                                      {/* Outer Label (if short bar) */}
-                                      {width <= 60 && (
-                                          <text x={x + width + 5} y={y + 19} fontSize="11" fill="#475569" fontWeight="medium">
-                                              {item.taskName}
+                                      return (
+                                          <g>
+                                              <line x1={x} y1="40" x2={x} y2="100%" stroke="#ef4444" strokeWidth="2" strokeDasharray="4 2" />
+                                              <text x={x + 5} y="55" fontSize="9" fill="#ef4444" fontWeight="bold">HOY</text>
+                                          </g>
+                                      );
+                                  }
+                                  return null;
+                              })()}
+
+                              {/* Timeline Header */}
+                              <g>
+                                  {/* Top Row: Months */}
+                                  {ganttHeaders.months.map((header: any, i: number) => (
+                                      <React.Fragment key={`m-${i}`}>
+                                          <rect x={header.x} y="0" width={header.width} height="20" fill="#e2e8f0" stroke="#cbd5e1" />
+                                          <text 
+                                              x={header.x + 5} 
+                                              y="14" 
+                                              fontSize="10" 
+                                              fill="#334155" 
+                                              fontWeight="bold"
+                                              className="uppercase"
+                                          >
+                                              {header.label}
                                           </text>
-                                      )}
-                                  </g>
-                              );
-                          })}
-                      </svg>
+                                      </React.Fragment>
+                                  ))}
+
+                                  {/* Bottom Row: Weeks */}
+                                  {ganttHeaders.weeks.map((header: any, i: number) => (
+                                      <React.Fragment key={`w-${i}`}>
+                                          <rect x={header.x} y="20" width={header.width} height="20" fill="#f8fafc" stroke="#e2e8f0" />
+                                          <text 
+                                              x={header.x + 5} 
+                                              y="34" 
+                                              fontSize="9" 
+                                              fill="#64748b" 
+                                          >
+                                              {header.label}
+                                          </text>
+                                      </React.Fragment>
+                                  ))}
+
+                                  {/* Minor Headers (Days) - Only show if scale is large enough */}
+                                  {ganttScale > 20 && Array.from({ length: criticalPathStats.totalDays + 5 }).map((_, i) => (
+                                      <text 
+                                        key={i} 
+                                        x={i * ganttScale + (ganttScale/2)} 
+                                        y="52" 
+                                        fontSize="8" 
+                                        fill="#94a3b8" 
+                                        textAnchor="middle"
+                                      >
+                                          {i+1}
+                                      </text>
+                                  ))}
+                              </g>
+
+                              {/* Task Bars & Logic */}
+                              {ganttItems.map((item, index) => {
+                                  const projectStart = new Date(project.startDate).getTime();
+                                  const itemStart = new Date(item.start).getTime();
+                                  
+                                  // Calculate pixel offset days
+                                  const startOffsetDay = Math.floor((itemStart - projectStart) / (1000 * 60 * 60 * 24));
+                                  const x = startOffsetDay * ganttScale;
+                                  const width = Math.max(2, item.duration * ganttScale);
+                                  const y = index * 40 + 60; // Shifted down by 20px due to double header
+                                  
+                                  // Summary Task Render
+                                  if (item.type === 'summary') {
+                                      const isCollapsed = collapsedSummaries.has(item.id);
+                                      return (
+                                          <g key={item.id} className="cursor-pointer hover:opacity-80" onClick={() => toggleSummary(item.id)}>
+                                              <title>Click para {isCollapsed ? 'expandir' : 'colapsar'} grupo</title>
+                                              {/* Main Bar */}
+                                              <rect x={x} y={y + 12} width={width} height="8" fill="#475569" rx="1" />
+                                              {/* End Caps (Brackets) */}
+                                              <path d={`M ${x} ${y+12} v 10 M ${x+width} ${y+12} v 10`} stroke="#475569" strokeWidth="2" />
+                                              {/* Label */}
+                                              <text x={x + 5} y={y + 9} fontSize="10" fill="#475569" fontWeight="bold" className="uppercase tracking-wider">
+                                                  {isCollapsed ? '[+] ' : '[-] '} {item.taskName}
+                                              </text>
+                                          </g>
+                                      );
+                                  }
+
+                                  // Bar Color: Red if Critical, Blue if Normal
+                                  const barColor = item.isCritical ? '#ef4444' : '#3b82f6';
+                                  const barOpacity = item.isCritical ? 0.9 : 0.7;
+                                  
+                                  // Text Overflow Logic
+                                  const charWidth = 6; // Approx
+                                  const textWidth = item.taskName.length * charWidth;
+                                  const fitsInside = width > textWidth + 10;
+
+                                  return (
+                                      <g key={item.id} className="group cursor-pointer" onClick={() => setEditingApuId(item.taskId)}>
+                                          <title>{item.taskName} - {item.duration} días</title>
+                                          {/* Dependency Lines */}
+                                          {item.dependencies?.map((dep, depIdx) => {
+                                              const pred = ganttItems.find(p => p.id === dep.predecessorId);
+                                              if (!pred) return null;
+                                              
+                                              // Find predator index/position
+                                              const predIdx = ganttItems.indexOf(pred);
+                                              const predStartDay = Math.floor((new Date(pred.start).getTime() - projectStart) / (1000 * 60 * 60 * 24));
+                                              const predXEnd = (predStartDay + pred.duration) * ganttScale;
+                                              const predY = predIdx * 40 + 60 + 15; // Center of bar (shifted)
+                                              
+                                              const currY = y + 15;
+                                              
+                                              // Draw Bezier Connector
+                                              const path = `M ${predXEnd} ${predY} 
+                                                            C ${predXEnd + 15} ${predY}, ${x - 15} ${currY}, ${x} ${currY}`;
+                                              
+                                              return (
+                                                  <path 
+                                                    key={`${item.id}-dep-${depIdx}`} 
+                                                    d={path} 
+                                                    fill="none" 
+                                                    stroke="#94a3b8" 
+                                                    strokeWidth="1.5" 
+                                                    markerEnd="url(#arrowhead)"
+                                                    className="opacity-50"
+                                                  />
+                                              );
+                                          })}
+
+                                          {/* Task Bar */}
+                                          <rect 
+                                              x={x} 
+                                              y={y + 5} 
+                                              width={width} 
+                                              height="20" 
+                                              rx="4" 
+                                              fill={barColor}
+                                              fillOpacity={barOpacity}
+                                              className="transition-all hover:fill-opacity-100 hover:stroke hover:stroke-slate-600 shadow-sm"
+                                          />
+                                          
+                                          {/* Progress Inner Bar (Mocked as solid bottom line if progress > 0) */}
+                                          {item.progress > 0 && (
+                                              <rect x={x} y={y + 20} width={width * (item.progress / 100)} height="3" fill="white" fillOpacity="0.5" />
+                                          )}
+
+                                          {/* Label */}
+                                          {fitsInside ? (
+                                              <text x={x + 10} y={y + 19} fontSize="10" fill="white" fontWeight="bold" pointerEvents="none" className="select-none">
+                                                  {item.taskName}
+                                              </text>
+                                          ) : (
+                                              <text x={x + width + 5} y={y + 19} fontSize="10" fill="#475569" fontWeight="medium">
+                                                  {item.taskName}
+                                              </text>
+                                          )}
+                                      </g>
+                                  );
+                              })}
+                          </svg>
+                      </div>
                   </div>
               </div>
           )}
@@ -473,11 +859,19 @@ export const Planning: React.FC = () => {
               <div className="flex gap-4">
                   <div className="flex items-center gap-2">
                       <div className="w-3 h-3 bg-red-500 rounded"></div>
-                      <span>Ruta Crítica (Holgura &lt; 1 día)</span>
+                      <span>Ruta Crítica</span>
                   </div>
                   <div className="flex items-center gap-2">
                       <div className="w-3 h-3 bg-blue-500 rounded"></div>
                       <span>Tarea Normal</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                      <div className="w-8 h-2 bg-slate-600 rounded-sm"></div>
+                      <span>Resumen</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 bg-slate-100 border border-slate-200"></div>
+                      <span>Día No Laborable</span>
                   </div>
               </div>
               <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-800 rounded-lg font-bold border border-blue-200">

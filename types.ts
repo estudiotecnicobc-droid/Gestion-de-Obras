@@ -115,6 +115,7 @@ export interface Task {
   materialsYield?: TaskYield[];
   equipmentYield?: TaskToolYield[];
   laborYield?: TaskCrewYield[]; 
+  laborIndividualYield?: TaskLaborYield[]; // New (Individuals)
 }
 
 export interface TaskYield {
@@ -134,6 +135,12 @@ export interface TaskCrewYield {
   taskId: string;
   crewId: string;
   quantity: number; // Cantidad de cuadrillas asignadas (usualmente 1)
+}
+
+export interface TaskLaborYield {
+  taskId: string;
+  laborCategoryId: string;
+  quantity: number; // Cantidad de oficiales (ej: 0.5, 1, 2)
 }
 
 

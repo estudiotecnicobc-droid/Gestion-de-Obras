@@ -1,4 +1,4 @@
-import { Material, Task, TaskYield, TaskToolYield, Tool, UnitPriceAnalysis, Holiday, TaskCrewYield, Crew, LaborCategory } from '../types';
+import { Material, Task, TaskYield, TaskToolYield, Tool, UnitPriceAnalysis, Holiday, TaskCrewYield, Crew, LaborCategory, TaskLaborYield } from '../types';
 
 // Helper to calculate labor cost total (with social charges)
 const calculateHourlyLaborCost = (lc: LaborCategory) => {
@@ -16,7 +16,8 @@ export const calculateUnitPrice = (
   taskCrewYieldsIndex?: Record<string, TaskCrewYield[]>,
   crewsMap?: Record<string, Crew>,
   laborCategoriesMap?: Record<string, LaborCategory>,
-  workdayHours: number = 9
+  workdayHours: number = 9,
+  taskLaborYieldsIndex?: Record<string, TaskLaborYield[]> // New Param for Individual Labor
 ): UnitPriceAnalysis => {
   
   // 1. Calculate Materials Cost
@@ -41,7 +42,7 @@ export const calculateUnitPrice = (
     }
   }
 
-  // 3. Calculate Labor Cost (Manual OR Derived from Crews)
+  // 3. Calculate Labor Cost (Manual OR Derived from Crews OR Individuals)
   let derivedLaborCost = 0;
   
   if (taskCrewYieldsIndex && crewsMap && laborCategoriesMap) {
@@ -69,9 +70,27 @@ export const calculateUnitPrice = (
       }
   }
 
-  // If crews are assigned, use derived cost plus any manual override, or default to manual if no crews
+  // Calculate Individual Labor Cost
+  if (taskLaborYieldsIndex && laborCategoriesMap) {
+      const laborYields = taskLaborYieldsIndex[task.id] || [];
+      for (const ly of laborYields) {
+          const category = laborCategoriesMap[ly.laborCategoryId];
+          if (category) {
+               // Cost = (Hourly * Workday * Quantity) / DailyYield
+               if ((task.dailyYield || 0) > 0) {
+                   derivedLaborCost += (calculateHourlyLaborCost(category) * workdayHours * ly.quantity) / task.dailyYield;
+               }
+          }
+      }
+  }
+
+  // If crews/individuals are assigned, use derived cost plus any manual override, or default to manual if no derived
   const baseLabor = task.laborCost || 0;
-  const laborCost = derivedLaborCost > 0 ? derivedLaborCost + baseLabor : baseLabor;
+  // If derived cost exists, we assume it REPLACES the manual cost unless we want to add them. 
+  // Usually, if you define resources, the manual cost is ignored or zeroed. 
+  // But to be safe and support "Extra Manual Cost", we can sum them, OR prefer derived.
+  // Let's prefer Derived if > 0, else use Manual.
+  const laborCost = derivedLaborCost > 0 ? derivedLaborCost : baseLabor;
 
   // 4. Fixed / Additional Costs (Flete, Ayuda de Gremio, etc.)
   const fixedCost = task.fixedCost || 0;

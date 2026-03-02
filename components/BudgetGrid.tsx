@@ -38,7 +38,7 @@ export const BudgetGrid: React.FC = () => {
     addTaskToolYield, updateTool, updateTask,
     // Indexes
     yieldsIndex, materialsMap, toolYieldsIndex, toolsMap,
-    laborCategoriesMap, taskCrewYieldsIndex, crewsMap
+    laborCategoriesMap, taskCrewYieldsIndex, crewsMap, taskLaborYieldsIndex
   } = useERP();
 
   const [expanded, setExpanded] = useState({});
@@ -59,7 +59,7 @@ export const BudgetGrid: React.FC = () => {
       const task = tasks.find(t => t.id === item.taskId);
       if (!task) return;
 
-      const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+      const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
       const category = task.category && rubros.includes(task.category) ? task.category : 'Sin Categoría';
       
       const gridRow: GridRow = {
@@ -190,7 +190,21 @@ export const BudgetGrid: React.FC = () => {
       ),
       size: 120,
     },
-  ], [updateBudgetItem]);
+    {
+      id: 'incidence',
+      header: '% Inc.',
+      cell: ({ row }) => {
+        const val = row.original.totalPrice;
+        const percent = totalProjectCost > 0 ? (val / totalProjectCost) * 100 : 0;
+        return (
+            <span className="text-xs text-slate-500 font-medium">
+                {percent.toFixed(2)}%
+            </span>
+        );
+      },
+      size: 80,
+    },
+  ], [updateBudgetItem, totalProjectCost]);
 
   const table = useReactTable({
     data,

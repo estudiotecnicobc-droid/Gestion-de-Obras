@@ -1,14 +1,22 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useERP } from '../context/ERPContext';
-import { Building, MapPin, User, Calendar, Save, CreditCard, Briefcase, CheckCircle, Ruler, Component, Layers, ArrowDownCircle, BookOpen, Clock, CalendarX, Plus, Trash2, FolderOpen, Bookmark, DollarSign, Users, HardHat, UserPlus, Download, Upload } from 'lucide-react';
+import { Building, MapPin, User, Calendar, Save, CreditCard, Briefcase, CheckCircle, Ruler, Component, Layers, ArrowDownCircle, BookOpen, Clock, CalendarX, Plus, Trash2, FolderOpen, Bookmark, DollarSign, Users, HardHat, UserPlus, Download, Upload, Edit, X } from 'lucide-react';
 import { CONSTRUCTION_SYSTEMS, STRUCTURE_TYPES, FOUNDATION_TYPES, PROJECT_TEMPLATES, DEFAULT_PRICING_CONFIG } from '../constants';
-import { Holiday, ProjectLaborDefinition, ProjectCrewDefinition, CalendarPreset } from '../types';
+import { Holiday, ProjectLaborDefinition, ProjectCrewDefinition, CalendarPreset, Crew, CrewComposition } from '../types';
 
 type Tab = 'general' | 'financial' | 'calendar' | 'labor';
 
 export const ProjectSettings: React.FC = () => {
-  const { project, updateProjectSettings, loadTemplate, calendarPresets, addCalendarPreset, applyCalendarPreset, deleteProject, laborCategories, crews, laborCategoriesMap } = useERP();
+  const { project, updateProjectSettings, loadTemplate, calendarPresets, addCalendarPreset, applyCalendarPreset, deleteProject, laborCategories, crews, laborCategoriesMap, addCrew, updateCrew, removeCrew } = useERP();
   const [activeTab, setActiveTab] = useState<Tab>('general');
+
+  // Crew Editing State
+  const [isCrewModalOpen, setIsCrewModalOpen] = useState(false);
+  const [editingCrew, setEditingCrew] = useState<Partial<Crew>>({
+      name: '',
+      description: '',
+      composition: []
+  });
 
   const [formData, setFormData] = useState({
     name: '',
@@ -209,6 +217,59 @@ export const ProjectSettings: React.FC = () => {
 
       return totalHourly * formData.workdayHours;
   }, [laborForce, assignedCrews, laborCategoriesMap, crews, formData.workdayHours]);
+
+  // --- Crew Management Handlers ---
+  const handleOpenCrewModal = (crew?: Crew) => {
+      if (crew) {
+          setEditingCrew({ ...crew });
+      } else {
+          setEditingCrew({
+              name: '',
+              description: '',
+              composition: []
+          });
+      }
+      setIsCrewModalOpen(true);
+  };
+
+  const handleSaveCrew = () => {
+      if (!editingCrew.name) return alert("El nombre es obligatorio");
+      
+      if (editingCrew.id) {
+          updateCrew(editingCrew.id, editingCrew);
+      } else {
+          addCrew({
+              ...editingCrew as Crew,
+              id: `crew_${crypto.randomUUID()}`,
+              composition: editingCrew.composition || []
+          });
+      }
+      setIsCrewModalOpen(false);
+  };
+
+  const addMemberToCrew = (laborCategoryId: string) => {
+      setEditingCrew(prev => ({
+          ...prev,
+          composition: [
+              ...(prev.composition || []),
+              { laborCategoryId, count: 1, participation: 100 }
+          ]
+      }));
+  };
+
+  const removeMemberFromCrew = (index: number) => {
+      setEditingCrew(prev => ({
+          ...prev,
+          composition: (prev.composition || []).filter((_, i) => i !== index)
+      }));
+  };
+
+  const updateMemberInCrew = (index: number, field: keyof CrewComposition, value: number) => {
+      setEditingCrew(prev => ({
+          ...prev,
+          composition: (prev.composition || []).map((c, i) => i === index ? { ...c, [field]: value } : c)
+      }));
+  };
 
   const DAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
@@ -534,16 +595,29 @@ export const ProjectSettings: React.FC = () => {
 
                         {/* Crews */}
                         <div>
-                            <h3 className="font-bold text-slate-700 flex items-center gap-2 border-b border-slate-100 pb-2 mb-4">
-                                <HardHat size={18} className="text-orange-500" /> Cuadrillas Armadas
-                            </h3>
+                            <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-4">
+                                <h3 className="font-bold text-slate-700 flex items-center gap-2">
+                                    <HardHat size={18} className="text-orange-500" /> Cuadrillas Armadas
+                                </h3>
+                                <button 
+                                    onClick={() => handleOpenCrewModal()}
+                                    className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded hover:bg-orange-200 font-bold flex items-center gap-1"
+                                >
+                                    <Plus size={14} /> Nueva
+                                </button>
+                            </div>
                             <div className="space-y-2">
                                 {crews.map(crew => {
                                     const assigned = assignedCrews.find(c => c.crewId === crew.id)?.count || 0;
                                     return (
-                                        <div key={crew.id} className="flex justify-between items-center bg-orange-50 p-3 rounded-lg border border-orange-100">
+                                        <div key={crew.id} className="flex justify-between items-center bg-orange-50 p-3 rounded-lg border border-orange-100 group">
                                             <div>
-                                                <div className="font-bold text-sm text-slate-800">{crew.name}</div>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="font-bold text-sm text-slate-800">{crew.name}</div>
+                                                    <button onClick={() => handleOpenCrewModal(crew)} className="text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <Edit size={12} />
+                                                    </button>
+                                                </div>
                                                 <div className="text-xs text-slate-500">{crew.description}</div>
                                             </div>
                                             <div className="flex items-center gap-3">
@@ -588,6 +662,128 @@ export const ProjectSettings: React.FC = () => {
             )}
 
         </div>
+
+        {/* Crew Editor Modal */}
+        {isCrewModalOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                    <div className="bg-slate-50 p-4 border-b border-slate-100 flex justify-between items-center">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                            <HardHat className="text-orange-500" size={20} /> 
+                            {editingCrew.id ? 'Editar Cuadrilla' : 'Nueva Cuadrilla'}
+                        </h3>
+                        <button onClick={() => setIsCrewModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                            <X size={20} />
+                        </button>
+                    </div>
+                    
+                    <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nombre de la Cuadrilla</label>
+                            <input 
+                                className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none" 
+                                placeholder="Ej: Cuadrilla Hormigón (1+3)"
+                                value={editingCrew.name}
+                                onChange={e => setEditingCrew({...editingCrew, name: e.target.value})}
+                                autoFocus
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Descripción</label>
+                            <input 
+                                className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none" 
+                                placeholder="Descripción opcional"
+                                value={editingCrew.description || ''}
+                                onChange={e => setEditingCrew({...editingCrew, description: e.target.value})}
+                            />
+                        </div>
+
+                        <div className="pt-4 border-t border-slate-100">
+                            <div className="flex justify-between items-center mb-2">
+                                <label className="block text-xs font-bold text-slate-500 uppercase">Integrantes</label>
+                                <div className="relative group">
+                                    <button className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100 font-bold flex items-center gap-1">
+                                        <Plus size={12} /> Agregar Rol
+                                    </button>
+                                    {/* Dropdown for adding role */}
+                                    <div className="absolute right-0 top-full mt-1 w-48 bg-white shadow-xl rounded-lg border border-slate-100 hidden group-hover:block z-10 max-h-48 overflow-y-auto">
+                                        {laborCategories.map(cat => (
+                                            <button 
+                                                key={cat.id}
+                                                onClick={() => addMemberToCrew(cat.id)}
+                                                className="w-full text-left px-3 py-2 text-xs hover:bg-slate-50 text-slate-700 block"
+                                            >
+                                                {cat.role}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="space-y-2 bg-slate-50 p-3 rounded-lg border border-slate-200 min-h-[100px]">
+                                {(!editingCrew.composition || editingCrew.composition.length === 0) && (
+                                    <div className="text-center py-8 text-slate-400 text-xs italic">
+                                        Sin integrantes asignados.
+                                    </div>
+                                )}
+                                {editingCrew.composition?.map((member, idx) => {
+                                    const role = laborCategoriesMap[member.laborCategoryId];
+                                    return (
+                                        <div key={idx} className="bg-white p-2 rounded border border-slate-200 flex items-center gap-2 shadow-sm">
+                                            <div className="flex-1">
+                                                <div className="font-bold text-xs text-slate-700">{role?.role || 'Rol desconocido'}</div>
+                                                <div className="text-[10px] text-slate-400">${role?.basicHourlyRate}/h</div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex flex-col items-end">
+                                                    <label className="text-[9px] text-slate-400 uppercase">Cant.</label>
+                                                    <input 
+                                                        type="number" 
+                                                        min="1"
+                                                        className="w-12 p-1 text-xs border rounded text-center"
+                                                        value={member.count}
+                                                        onChange={e => updateMemberInCrew(idx, 'count', parseFloat(e.target.value))}
+                                                    />
+                                                </div>
+                                                <div className="flex flex-col items-end">
+                                                    <label className="text-[9px] text-slate-400 uppercase">% Inc.</label>
+                                                    <input 
+                                                        type="number" 
+                                                        min="1"
+                                                        max="100"
+                                                        className="w-12 p-1 text-xs border rounded text-center"
+                                                        value={member.participation || 100}
+                                                        onChange={e => updateMemberInCrew(idx, 'participation', parseFloat(e.target.value))}
+                                                    />
+                                                </div>
+                                                <button onClick={() => removeMemberFromCrew(idx)} className="text-red-400 hover:text-red-600 p-1">
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-2">
+                        <button 
+                            onClick={() => setIsCrewModalOpen(false)}
+                            className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg text-sm font-bold"
+                        >
+                            Cancelar
+                        </button>
+                        <button 
+                            onClick={handleSaveCrew}
+                            className="px-4 py-2 bg-orange-600 text-white hover:bg-orange-700 rounded-lg text-sm font-bold shadow-lg shadow-orange-200 flex items-center gap-2"
+                        >
+                            <Save size={16} /> Guardar Cuadrilla
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
     </div>
   );
 };

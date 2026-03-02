@@ -5,7 +5,7 @@ import { calculateUnitPrice } from '../services/calculationService';
 import { 
   Trash2, Plus, Search, Settings, Save, CheckSquare, Square, 
   ArrowRight, Printer, Calculator, ChevronDown, ChevronRight,
-  Info, RefreshCcw, DollarSign, Clock, X, Package, Hammer, Edit3, AlertCircle, PenTool
+  Info, RefreshCcw, DollarSign, Clock, X, Package, Hammer, Edit3, AlertCircle, PenTool, Sparkles
 } from 'lucide-react';
 import { Task, ProjectTemplate } from '../types';
 import { PROJECT_TEMPLATES } from '../constants';
@@ -13,10 +13,11 @@ import { APUBuilder } from './APUBuilder';
 
 export const BudgetEditor: React.FC = () => {
   const { 
-    project, tasks, rubros,
-    addBudgetItem, removeBudgetItem, updateBudgetItem, updateTask,
+    project, tasks, rubros, rubroPresets,
+    addBudgetItem, removeBudgetItem, updateBudgetItem, updateTask, addTask,
+    addRubroPreset, removeRubroPreset,
     yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, 
-    taskCrewYieldsIndex, crewsMap, laborCategoriesMap,
+    taskCrewYieldsIndex, crewsMap, laborCategoriesMap, taskLaborYieldsIndex,
     loadTemplate
   } = useERP();
 
@@ -25,6 +26,8 @@ export const BudgetEditor: React.FC = () => {
   const [selectedRubros, setSelectedRubros] = useState<Set<string>>(new Set(rubros));
   const [globalAdjustment, setGlobalAdjustment] = useState<number>(0); 
   const [expandedRubros, setExpandedRubros] = useState<Set<string>>(new Set(rubros)); 
+  const [managePresetsMode, setManagePresetsMode] = useState(false);
+  const [newPresetName, setNewPresetName] = useState('');
 
   // --- CONFIG PANEL STATE (Quick Add/Edit Item) ---
   const [configPanel, setConfigPanel] = useState<{
@@ -44,6 +47,19 @@ export const BudgetEditor: React.FC = () => {
 
   // --- MASTER APU EDITOR STATE ---
   const [apuEditorTaskId, setApuEditorTaskId] = useState<string | null>(null);
+  const [editingQuantityId, setEditingQuantityId] = useState<string | null>(null);
+
+  // --- PRINT PREVIEW STATE ---
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
+  const [printOptions, setPrintOptions] = useState({
+      showUnitPrice: true,
+      showQuantity: true,
+      showMatSubtotal: true,
+      showLabSubtotal: true,
+      showTotal: true,
+      showCategoryHeaders: true,
+      showFooter: true
+  });
 
   // --- CALCULATIONS & DATA PREP ---
   const budgetData = useMemo(() => {
@@ -64,7 +80,7 @@ export const BudgetEditor: React.FC = () => {
 
       const category = task.category && selectedRubros.has(task.category) ? task.category : 'Otros';
       
-      const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+      const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
       
       const unitMatEq = analysis.materialCost + analysis.toolCost + analysis.fixedCost;
       const unitLab = analysis.laborCost;
@@ -173,12 +189,52 @@ export const BudgetEditor: React.FC = () => {
       setConfigPanel({ ...configPanel, isOpen: false });
   };
 
+  const handleSelectPreset = (preset: Partial<Task>) => {
+      // Check if task exists
+      const existing = tasks.find(t => t.name === preset.name && t.category === configPanel.category);
+      if (existing) {
+          setConfigPanel(prev => ({ ...prev, selectedTaskId: existing.id }));
+      } else {
+          // Create new task
+          const newId = `task_${crypto.randomUUID().substring(0,8)}`;
+          const newTask: Task = {
+              id: newId,
+              organizationId: project.organizationId,
+              name: preset.name || 'Nueva Tarea',
+              unit: preset.unit || 'u',
+              category: configPanel.category,
+              laborCost: preset.laborCost || 0,
+              dailyYield: preset.dailyYield || 1,
+              description: preset.description || '',
+              // ... defaults
+          };
+          addTask(newTask);
+          setConfigPanel(prev => ({ ...prev, selectedTaskId: newId }));
+      }
+  };
+
+  const handleAddPreset = () => {
+      if (!newPresetName.trim()) return;
+      addRubroPreset(configPanel.category, {
+          name: newPresetName,
+          unit: 'u', // Default unit
+          category: configPanel.category,
+          laborCost: 0,
+          dailyYield: 1
+      });
+      setNewPresetName('');
+  };
+
+  const handleDeletePreset = (name: string) => {
+      removeRubroPreset(configPanel.category, name);
+  };
+
   // Render logic
   return (
     <div className="flex h-full gap-6 font-sans relative">
       
       {/* LEFT SIDEBAR: STAGES SELECTION */}
-      <div className="w-72 flex-shrink-0 bg-white border border-slate-200 rounded-xl flex flex-col overflow-hidden shadow-sm h-full">
+      <div className="w-72 flex-shrink-0 bg-white border border-slate-200 rounded-xl flex flex-col overflow-hidden shadow-sm h-full print:hidden">
           <div className="p-4 bg-slate-900 text-white">
               <h3 className="font-bold text-lg">Etapas de Obra</h3>
               <p className="text-xs text-slate-400 mt-1">Seleccione los rubros activos</p>
@@ -221,7 +277,7 @@ export const BudgetEditor: React.FC = () => {
       </div>
 
       {/* MAIN CONTENT */}
-      <div className="flex-1 flex flex-col h-full bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden relative">
+      <div className="flex-1 flex flex-col h-full bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden relative print:hidden">
           
           {/* HEADER & STEPPER */}
           <div className="p-6 border-b border-slate-100">
@@ -233,7 +289,7 @@ export const BudgetEditor: React.FC = () => {
                       </div>
                   </div>
                   <div className="flex items-center gap-2">
-                      <button className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors">
+                      <button onClick={() => setShowPrintPreview(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors">
                           <Printer size={16} /> Imprimir
                       </button>
                       <button className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200">
@@ -312,13 +368,24 @@ export const BudgetEditor: React.FC = () => {
                                                             <td className="p-2 text-center text-xs text-slate-500 bg-slate-50/50">{row.task.unit}</td>
                                                             
                                                             {/* Quantity Input */}
-                                                            <td className="p-2">
-                                                                <input 
-                                                                    type="number"
-                                                                    className="w-full text-center p-1 border border-slate-300 rounded text-sm font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                                                                    value={row.item.quantity}
-                                                                    onChange={(e) => updateBudgetItem(row.item.id, { quantity: parseFloat(e.target.value) })}
-                                                                />
+                                                            <td className="p-2" onDoubleClick={() => setEditingQuantityId(row.item.id)}>
+                                                                {editingQuantityId === row.item.id ? (
+                                                                    <input 
+                                                                        type="number"
+                                                                        autoFocus
+                                                                        className="w-full text-center p-1 border border-blue-500 rounded text-sm font-bold text-slate-800 focus:outline-none shadow-sm"
+                                                                        value={row.item.quantity}
+                                                                        onChange={(e) => updateBudgetItem(row.item.id, { quantity: parseFloat(e.target.value) || 0 })}
+                                                                        onBlur={() => setEditingQuantityId(null)}
+                                                                        onKeyDown={(e) => {
+                                                                            if (e.key === 'Enter') setEditingQuantityId(null);
+                                                                        }}
+                                                                    />
+                                                                ) : (
+                                                                    <div className="text-center text-sm font-bold text-slate-700 cursor-pointer hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded transition-colors" title="Doble clic para editar">
+                                                                        {row.item.quantity}
+                                                                    </div>
+                                                                )}
                                                             </td>
 
                                                             {/* Material Columns */}
@@ -370,9 +437,12 @@ export const BudgetEditor: React.FC = () => {
                                                     ))}
                                                     {/* Row to add item at end of list */}
                                                     <tr>
-                                                        <td colSpan={9} className="p-1 bg-slate-50/50 border-b border-slate-100">
-                                                            <button onClick={() => handleQuickAddTask(rubro)} className="w-full text-center text-[10px] text-blue-500 font-bold hover:bg-blue-50 py-1 rounded transition-colors opacity-0 group-hover:opacity-100">
-                                                                + Agregar Tarea
+                                                        <td colSpan={9} className="p-2">
+                                                            <button 
+                                                                onClick={() => handleQuickAddTask(rubro)} 
+                                                                className="w-full py-2 border-2 border-dashed border-slate-200 rounded-lg text-xs font-bold text-slate-400 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50 transition-all flex items-center justify-center gap-2"
+                                                            >
+                                                                <Plus size={14} /> Agregar Nueva Tarea en {rubro}
                                                             </button>
                                                         </td>
                                                     </tr>
@@ -454,8 +524,69 @@ export const BudgetEditor: React.FC = () => {
                               </select>
                           </div>
 
+                          {/* Presets Section */}
+                          {configPanel.mode === 'add' && (
+                              <div className="space-y-3 pt-4 border-t border-slate-100">
+                                  <div className="flex justify-between items-center">
+                                      <label className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                                          <Sparkles size={12} className="text-yellow-500" /> Tareas Típicas / Sugeridas
+                                      </label>
+                                      <button 
+                                          onClick={() => setManagePresetsMode(!managePresetsMode)}
+                                          className="text-[10px] text-blue-600 font-bold hover:underline"
+                                      >
+                                          {managePresetsMode ? 'Terminar Edición' : 'Gestionar Lista'}
+                                      </button>
+                                  </div>
+                                  
+                                  {managePresetsMode && (
+                                      <div className="flex gap-2 mb-2">
+                                          <input 
+                                              className="flex-1 p-2 text-xs border border-slate-300 rounded"
+                                              placeholder="Nombre de nueva tarea típica..."
+                                              value={newPresetName}
+                                              onChange={e => setNewPresetName(e.target.value)}
+                                          />
+                                          <button 
+                                              onClick={handleAddPreset}
+                                              className="px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded hover:bg-blue-700"
+                                          >
+                                              <Plus size={14} />
+                                          </button>
+                                      </div>
+                                  )}
+
+                                  <div className="flex flex-col gap-2 max-h-60 overflow-y-auto pr-1">
+                                      {(rubroPresets[configPanel.category] || []).map((preset, idx) => (
+                                          <div key={idx} className="flex items-center gap-2 group">
+                                              <button 
+                                                  onClick={() => handleSelectPreset(preset)}
+                                                  className="flex-1 text-left p-2 text-xs bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 rounded transition-colors flex justify-between items-center"
+                                              >
+                                                  <span className="font-medium text-slate-700">{preset.name}</span>
+                                                  <span className="text-[10px] text-slate-400 bg-white px-1 rounded border border-slate-100">{preset.unit}</span>
+                                              </button>
+                                              {managePresetsMode && (
+                                                  <button 
+                                                      onClick={() => handleDeletePreset(preset.name!)}
+                                                      className="p-2 text-red-400 hover:bg-red-50 rounded bg-red-50"
+                                                  >
+                                                      <Trash2 size={14} />
+                                                  </button>
+                                              )}
+                                          </div>
+                                      ))}
+                                      {(rubroPresets[configPanel.category] || []).length === 0 && (
+                                          <div className="text-center p-4 text-xs text-slate-400 italic bg-slate-50 rounded border border-dashed border-slate-200">
+                                              No hay tareas típicas definidas para este rubro.
+                                          </div>
+                                      )}
+                                  </div>
+                              </div>
+                          )}
+
                           {/* Quantity Input */}
-                          <div className="space-y-2">
+                          <div className="space-y-2 pt-4 border-t border-slate-100">
                               <label className="text-xs font-bold text-slate-500 uppercase">Cantidad Presupuestada</label>
                               <div className="flex items-center gap-3">
                                   <input 
@@ -497,6 +628,172 @@ export const BudgetEditor: React.FC = () => {
               <div className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
                   <div className="bg-white w-full max-w-5xl h-[90vh] rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95">
                       <APUBuilder taskId={apuEditorTaskId} onClose={() => setApuEditorTaskId(null)} />
+                  </div>
+              </div>
+          )}
+
+          {/* PRINT PREVIEW MODAL */}
+          {showPrintPreview && (
+              <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 print:p-0 print:bg-white print:static">
+                  <div className="bg-white w-full max-w-6xl h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col print:h-auto print:w-full print:max-w-none print:shadow-none print:rounded-none">
+                      
+                      {/* HEADER (Hidden on Print) */}
+                      <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 print:hidden">
+                          <div>
+                              <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+                                  <Printer size={20} className="text-blue-600"/> Vista Previa de Impresión
+                              </h3>
+                              <p className="text-xs text-slate-500">Configure qué columnas desea incluir en el reporte.</p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                              <button onClick={() => window.print()} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 flex items-center gap-2 shadow-lg shadow-blue-200">
+                                  <Printer size={16} /> Imprimir Ahora
+                              </button>
+                              <button onClick={() => setShowPrintPreview(false)} className="p-2 hover:bg-slate-200 rounded-full text-slate-400">
+                                  <X size={20} />
+                              </button>
+                          </div>
+                      </div>
+
+                      <div className="flex flex-1 overflow-hidden print:overflow-visible print:h-auto">
+                          {/* SIDEBAR CONFIG (Hidden on Print) */}
+                          <div className="w-64 bg-slate-50 border-r border-slate-200 p-4 overflow-y-auto print:hidden">
+                              <h4 className="font-bold text-xs text-slate-500 uppercase mb-4">Opciones de Reporte</h4>
+                              <div className="space-y-3">
+                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                      <input type="checkbox" checked={printOptions.showQuantity} onChange={e => setPrintOptions({...printOptions, showQuantity: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                      Mostrar Cantidad
+                                  </label>
+                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                      <input type="checkbox" checked={printOptions.showUnitPrice} onChange={e => setPrintOptions({...printOptions, showUnitPrice: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                      Mostrar Precios Unitarios
+                                  </label>
+                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                      <input type="checkbox" checked={printOptions.showMatSubtotal} onChange={e => setPrintOptions({...printOptions, showMatSubtotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                      Mostrar Subtotal Materiales
+                                  </label>
+                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                      <input type="checkbox" checked={printOptions.showLabSubtotal} onChange={e => setPrintOptions({...printOptions, showLabSubtotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                      Mostrar Subtotal Mano de Obra
+                                  </label>
+                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                      <input type="checkbox" checked={printOptions.showTotal} onChange={e => setPrintOptions({...printOptions, showTotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                      Mostrar Total Ítem
+                                  </label>
+                                  <div className="h-px bg-slate-200 my-2"></div>
+                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                      <input type="checkbox" checked={printOptions.showCategoryHeaders} onChange={e => setPrintOptions({...printOptions, showCategoryHeaders: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                      Agrupar por Rubros
+                                  </label>
+                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                      <input type="checkbox" checked={printOptions.showFooter} onChange={e => setPrintOptions({...printOptions, showFooter: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                      Mostrar Totales Generales
+                                  </label>
+                              </div>
+                          </div>
+
+                          {/* PREVIEW CONTENT */}
+                          <div className="flex-1 overflow-auto bg-white p-8 print:p-0 print:overflow-visible">
+                              <div className="max-w-[210mm] mx-auto bg-white shadow-sm border border-slate-100 min-h-[297mm] p-8 print:shadow-none print:border-none print:max-w-none print:mx-0 print:p-0">
+                                  
+                                  {/* Report Header */}
+                                  <div className="mb-8 border-b-2 border-slate-800 pb-4">
+                                      <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tight">{project.name}</h1>
+                                      <div className="flex justify-between items-end mt-2">
+                                          <div>
+                                              <p className="text-sm text-slate-600 font-bold">Cómputo y Presupuesto de Obra</p>
+                                              <p className="text-xs text-slate-500">Fecha de Emisión: {new Date().toLocaleDateString()}</p>
+                                          </div>
+                                          <div className="text-right">
+                                              <p className="text-xs text-slate-400">Generado por Construsoft</p>
+                                          </div>
+                                      </div>
+                                  </div>
+
+                                  {/* Report Table */}
+                                  <table className="w-full text-left border-collapse text-xs">
+                                      <thead>
+                                          <tr className="border-b-2 border-slate-800">
+                                              <th className="py-2 font-bold text-slate-700 uppercase">Ítem / Descripción</th>
+                                              <th className="py-2 text-center font-bold text-slate-700 w-12">Unid.</th>
+                                              {printOptions.showQuantity && <th className="py-2 text-center font-bold text-slate-700 w-16">Cant.</th>}
+                                              {printOptions.showUnitPrice && <th className="py-2 text-right font-bold text-slate-700 w-24">P. Unit.</th>}
+                                              {printOptions.showMatSubtotal && <th className="py-2 text-right font-bold text-slate-700 w-24">Mat. Total</th>}
+                                              {printOptions.showLabSubtotal && <th className="py-2 text-right font-bold text-slate-700 w-24">M.O. Total</th>}
+                                              {printOptions.showTotal && <th className="py-2 text-right font-bold text-slate-900 w-28">Total</th>}
+                                          </tr>
+                                      </thead>
+                                      <tbody>
+                                          {Array.from(selectedRubros).map((rubro) => {
+                                              const items = budgetData.grouped[rubro] || [];
+                                              if (items.length === 0) return null;
+                                              const totals = budgetData.categoryTotals[rubro];
+
+                                              return (
+                                                  <React.Fragment key={rubro}>
+                                                      {printOptions.showCategoryHeaders && (
+                                                          <tr className="bg-slate-100 break-inside-avoid">
+                                                              <td colSpan={10} className="py-2 px-2 font-bold text-slate-800 uppercase text-[10px] tracking-wider border-t border-slate-300 mt-4">
+                                                                  {rubro}
+                                                              </td>
+                                                          </tr>
+                                                      )}
+                                                      {items.map((row) => (
+                                                          <tr key={row.item.id} className="border-b border-slate-100 break-inside-avoid">
+                                                              <td className="py-1.5 pr-2">
+                                                                  <div className="font-medium text-slate-800">{row.task.name}</div>
+                                                                  <div className="text-[9px] text-slate-500">{row.task.code}</div>
+                                                              </td>
+                                                              <td className="py-1.5 text-center text-slate-500">{row.task.unit}</td>
+                                                              {printOptions.showQuantity && <td className="py-1.5 text-center font-mono font-bold text-slate-700">{row.item.quantity}</td>}
+                                                              {printOptions.showUnitPrice && <td className="py-1.5 text-right font-mono text-slate-600">${row.analysis.totalUnitCost.toFixed(2)}</td>}
+                                                              {printOptions.showMatSubtotal && <td className="py-1.5 text-right font-mono text-slate-600">${row.totalMatEq.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                              {printOptions.showLabSubtotal && <td className="py-1.5 text-right font-mono text-slate-600">${row.totalLab.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                              {printOptions.showTotal && <td className="py-1.5 text-right font-mono font-bold text-slate-900">${row.totalItem.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                          </tr>
+                                                      ))}
+                                                      {printOptions.showCategoryHeaders && (
+                                                          <tr className="break-inside-avoid">
+                                                              <td colSpan={2} className="py-2 text-right font-bold text-[10px] text-slate-500 uppercase">Subtotal {rubro}</td>
+                                                              {printOptions.showQuantity && <td></td>}
+                                                              {printOptions.showUnitPrice && <td></td>}
+                                                              {printOptions.showMatSubtotal && <td className="py-2 text-right font-mono font-bold text-slate-700 border-t border-slate-300">${totals.mat.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                              {printOptions.showLabSubtotal && <td className="py-2 text-right font-mono font-bold text-slate-700 border-t border-slate-300">${totals.lab.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                              {printOptions.showTotal && <td className="py-2 text-right font-mono font-bold text-slate-900 border-t border-slate-300">${totals.total.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                          </tr>
+                                                      )}
+                                                  </React.Fragment>
+                                              );
+                                          })}
+                                      </tbody>
+                                  </table>
+
+                                  {/* Footer Totals */}
+                                  {printOptions.showFooter && (
+                                      <div className="mt-8 border-t-2 border-slate-800 pt-4 break-inside-avoid">
+                                          <div className="flex justify-end gap-8">
+                                              {printOptions.showMatSubtotal && (
+                                                  <div className="text-right">
+                                                      <div className="text-[10px] font-bold text-slate-500 uppercase">Total Materiales</div>
+                                                      <div className="text-sm font-mono font-bold text-slate-800">${grandTotals.mat.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                                  </div>
+                                              )}
+                                              {printOptions.showLabSubtotal && (
+                                                  <div className="text-right">
+                                                      <div className="text-[10px] font-bold text-slate-500 uppercase">Total Mano de Obra</div>
+                                                      <div className="text-sm font-mono font-bold text-slate-800">${grandTotals.lab.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                                  </div>
+                                              )}
+                                              <div className="text-right">
+                                                  <div className="text-[10px] font-bold text-slate-500 uppercase">TOTAL GENERAL</div>
+                                                  <div className="text-xl font-black text-slate-900 font-mono">${grandTotals.finalTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                              </div>
+                                          </div>
+                                      </div>
+                                  )}
+                              </div>
+                          </div>
+                      </div>
                   </div>
               </div>
           )}
