@@ -201,7 +201,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       };
   }, [projects, activeProjectId, orgId]);
 
-  const snapshots = useMemo(() => allSnapshots.filter(x => x.organizationId === orgId), [allSnapshots, orgId]);
+  const snapshots = useMemo(() => allSnapshots.filter(x => x.organizationId === orgId && x.projectId === project.id), [allSnapshots, orgId, project.id]);
   const receptions = useMemo(() => allReceptions.filter(x => x.organizationId === orgId), [allReceptions, orgId]);
   const subcontractors = useMemo(() => allSubcontractors.filter(x => x.organizationId === orgId), [allSubcontractors, orgId]);
   const contracts = useMemo(() => allContracts.filter(x => x.organizationId === orgId), [allContracts, orgId]);
@@ -474,7 +474,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         taskId = existing.id;
       } else {
         taskId = `t_${crypto.randomUUID().substring(0,8)}`;
-        newTasks.push({ ...t, id: taskId, organizationId: orgId });
+        newTasks.push({ ...t, id: taskId, organizationId: orgId } as Task);
       }
 
       newBudgetItems.push({
@@ -497,6 +497,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const newSnapshot: Snapshot = {
           id: crypto.randomUUID(),
           organizationId: orgId,
+          projectId: project.id, // Added projectId
           date: new Date().toISOString(),
           name,
           totalCost,

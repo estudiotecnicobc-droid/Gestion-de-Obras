@@ -5,7 +5,7 @@ import { addWorkingDays, diffDays, addDays, calculateUnitPrice } from '../servic
 import { 
   Calendar, Clock, AlertCircle, ArrowDown, Calculator, 
   ChevronsRight, Users, Check, Layout, List, PenTool,
-  ZoomIn, ZoomOut, MoveRight, Sidebar, Download, Printer, FileText, ChevronLeft, ChevronRight, DollarSign
+  ZoomIn, ZoomOut, MoveRight, Sidebar, Download, Printer, FileText, ChevronLeft, ChevronRight, DollarSign, TrendingUp
 } from 'lucide-react';
 import { LinkType } from '../types';
 import { APUBuilder } from './APUBuilder';
@@ -14,18 +14,41 @@ export const Planning: React.FC = () => {
   const { 
     project, tasks, updateBudgetItem,
     yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, 
-    taskCrewYieldsIndex, crewsMap, laborCategoriesMap
+    taskCrewYieldsIndex, crewsMap, laborCategoriesMap,
+    createSnapshot, snapshots, measurementSheets // Added measurementSheets
   } = useERP();
   
   // --- UI STATE ---
-  const [viewMode, setViewMode] = useState<'table' | 'gantt'>('table');
+  const [viewMode, setViewMode] = useState<'table' | 'gantt' | 'control'>('table');
   const [editingApuId, setEditingApuId] = useState<string | null>(null);
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   
   // Gantt Specific State
   const [timeScale, setTimeScale] = useState<'day' | 'week' | 'month' | 'quarter' | 'project'>('day');
   const [showSidebar, setShowSidebar] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(450); // Resizable sidebar width
   const [ganttScale, setGanttScale] = useState(40); // Pixels per day
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Resizing Handler
+  const startResizing = (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = sidebarWidth;
+
+      const onMouseMove = (e: MouseEvent) => {
+          const newWidth = startWidth + (e.clientX - startX);
+          setSidebarWidth(Math.max(250, Math.min(800, newWidth)));
+      };
+
+      const onMouseUp = () => {
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+      };
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+  };
   
   // Collapsed Summaries State
   const [collapsedSummaries, setCollapsedSummaries] = useState<Set<string>>(new Set());
@@ -46,6 +69,22 @@ export const Planning: React.FC = () => {
   const workingDays = project.workingDays || [1,2,3,4,5]; 
   const nonWorkingDates = project.nonWorkingDates || [];
   const workdayHours = project.workdayHours || 9;
+
+  // --- SNAPSHOT HANDLER ---
+  const handleSnapshot = () => {
+      // Calculate current total cost for the snapshot
+      const currentTotal = project.items.reduce((acc, item) => {
+          const task = tasks.find(t => t.id === item.taskId);
+          if (!task) return acc;
+          const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+          return acc + (analysis.totalUnitCost * item.quantity);
+      }, 0);
+
+      const name = prompt("Nombre para la línea base (Snapshot):", `Linea Base ${snapshots.length + 1}`);
+      if (name) {
+          createSnapshot(name, currentTotal);
+      }
+  };
 
   // --- 1. SCHEDULING ENGINE (FORWARD PASS) ---
   const scheduledItems = useMemo(() => {
@@ -143,7 +182,7 @@ export const Planning: React.FC = () => {
       const projectFinish = Math.max(...scheduledItems.map(i => i.earlyFinish));
 
       // 2. Map for quick access
-      const itemMap = new Map(scheduledItems.map(i => [i.id, { ...i, lateStart: 0, lateFinish: 0, totalFloat: 0, isCritical: false }]));
+      const itemMap = new Map<string, any>(scheduledItems.map(i => [i.id, { ...i, lateStart: 0, lateFinish: 0, totalFloat: 0, isCritical: false }]));
 
       // 3. Initialize Late Finish for tasks with no successors (they determine project end)
       //    Actually, simpler: Initialize ALL Late Finishes to Project Finish initially? No.
@@ -403,10 +442,17 @@ export const Planning: React.FC = () => {
                  <div className="text-[10px] font-bold text-slate-400 uppercase">Fin de Obra Estimado</div>
                  <div className="text-lg font-bold text-slate-800">{criticalPathStats.finishDate.toLocaleDateString()}</div>
              </div>
-             <div className="text-right">
+             <div className="text-right border-r border-slate-200 pr-4">
                  <div className="text-[10px] font-bold text-slate-400 uppercase">Duración Total</div>
                  <div className="text-lg font-bold text-blue-600">{criticalPathStats.totalDays} días</div>
              </div>
+             <button 
+                onClick={handleSnapshot}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white hover:bg-black rounded-lg text-sm font-bold transition-all shadow-md"
+                title="Guardar estado actual como Línea Base"
+             >
+                 <Clock size={16} /> Fijar Línea Base
+             </button>
          </div>
       </div>
 
@@ -426,6 +472,12 @@ export const Planning: React.FC = () => {
                     className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${viewMode === 'gantt' ? 'bg-white text-blue-600 shadow' : 'text-slate-500 hover:bg-slate-200'}`}
                   >
                       <Layout size={16} /> Gantt
+                  </button>
+                  <button 
+                    onClick={() => setViewMode('control')}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${viewMode === 'control' ? 'bg-white text-blue-600 shadow' : 'text-slate-500 hover:bg-slate-200'}`}
+                  >
+                      <TrendingUp size={16} /> Seguimiento y Control
                   </button>
               </div>
               
@@ -483,6 +535,7 @@ export const Planning: React.FC = () => {
                               <th className="p-3 border-r border-slate-200 w-24 text-center">Rend. Base (u/día)</th>
                               <th className="p-3 border-r border-slate-200 w-24 text-center">Prod. Total</th>
                               <th className="p-3 border-r border-slate-200 w-24 text-center font-black text-slate-700">Duración (Días)</th>
+                              <th className="p-3 border-r border-slate-200 w-24 text-center bg-emerald-50/50">Avance %</th>
                               <th className="p-3 border-r border-slate-200 w-40 text-center">Precedencia</th>
                               <th className="p-3 border-r border-slate-200 w-28 text-center">Fecha Inicio</th>
                               <th className="p-3 border-r border-slate-200 w-28 text-center">Fecha Fin</th>
@@ -561,6 +614,35 @@ export const Planning: React.FC = () => {
                                       {item.duration}
                                   </td>
 
+                                  {/* INPUT: Progress */}
+                                  <td className="p-2 text-center bg-emerald-50/30">
+                                      <div className="flex flex-col items-center justify-center gap-1">
+                                          <div className="flex items-center gap-1">
+                                              <input 
+                                                type="number" 
+                                                min="0"
+                                                max="100"
+                                                className="w-12 p-1 text-center border border-slate-300 rounded font-bold text-slate-700 focus:border-emerald-500 outline-none"
+                                                value={item.progress || 0}
+                                                onChange={(e) => handleUpdate(item.id, 'progress', Math.min(100, Math.max(0, parseFloat(e.target.value))))}
+                                              />
+                                              <span className="text-[10px] text-slate-400">%</span>
+                                          </div>
+                                          {(() => {
+                                              const sheet = measurementSheets.find(s => s.budgetItemId === item.id);
+                                              if (sheet && item.quantity > 0) {
+                                                  const calc = Math.min(100, Math.round((sheet.totalQuantity / item.quantity) * 100));
+                                                  return (
+                                                      <div className="text-[9px] text-slate-400" title="Según Planilla de Mediciones">
+                                                          (Med: {calc}%)
+                                                      </div>
+                                                  );
+                                              }
+                                              return null;
+                                          })()}
+                                      </div>
+                                  </td>
+
                                   {/* INPUT: Predecessor */}
                                   <td className="p-2 text-center">
                                       <select 
@@ -600,34 +682,43 @@ export const Planning: React.FC = () => {
               <div className="flex-1 flex overflow-hidden">
                   {/* SIDEBAR: Task List */}
                   {showSidebar && (
-                      <div className="w-[450px] flex-shrink-0 border-r border-slate-200 bg-white overflow-y-auto flex flex-col print:hidden">
-                          <div className="h-10 bg-slate-100 border-b border-slate-200 flex items-center px-4 text-[10px] font-bold text-slate-500 uppercase sticky top-0 z-10">
-                              <div className="w-8 text-center">ID</div>
-                              <div className="flex-1 px-2">Tarea</div>
-                              <div className="w-16 text-center">Duración</div>
-                              <div className="w-20 text-center">Inicio</div>
+                      <div 
+                          className="flex-shrink-0 border-r border-slate-200 bg-white overflow-y-auto flex flex-col print:hidden relative group/sidebar"
+                          style={{ width: sidebarWidth }}
+                      >
+                          <div className="h-10 bg-slate-100 border-b border-slate-200 flex items-center px-4 text-[11px] font-bold text-slate-600 uppercase sticky top-0 z-10 tracking-wide">
+                              <div className="w-10 text-center border-r border-slate-200/50 mr-2">ID</div>
+                              <div className="flex-1 px-2 border-r border-slate-200/50 mr-2">Tarea</div>
+                              <div className="w-16 text-center border-r border-slate-200/50 mr-2">Dur.</div>
+                              <div className="w-20 text-center border-r border-slate-200/50 mr-2">Inicio</div>
                               <div className="w-20 text-center">Fin</div>
                           </div>
                           {ganttItems.map((item, idx) => (
                               <div 
                                   key={item.id} 
-                                  className={`h-10 flex items-center px-4 border-b border-slate-100 hover:bg-slate-50 text-xs group cursor-pointer transition-colors ${item.type === 'summary' ? 'bg-slate-100 font-bold' : ''} ${item.isCritical && item.type !== 'summary' ? 'bg-red-50/10' : ''}`}
+                                  className={`h-10 flex items-center px-4 border-b border-slate-100 hover:bg-slate-50 text-xs group cursor-pointer transition-colors ${item.type === 'summary' ? 'bg-slate-50 font-bold text-slate-800' : 'text-slate-600'} ${item.isCritical && item.type !== 'summary' ? 'bg-red-50/20' : ''}`}
                                   onClick={() => item.type !== 'summary' && setEditingApuId(item.taskId)}
                               >
-                                  <div className="w-8 text-center text-slate-400 font-mono">{item.index || ''}</div>
-                                  <div className="flex-1 truncate font-medium text-slate-700 px-2 flex items-center gap-2" title={item.taskName}>
-                                      {item.isCritical && item.type !== 'summary' && <div className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" title="Ruta Crítica"></div>}
+                                  <div className="w-10 text-center text-slate-400 font-mono text-[10px] border-r border-slate-100 mr-2">{item.index || ''}</div>
+                                  <div className="flex-1 truncate font-medium px-2 flex items-center gap-2 border-r border-slate-100 mr-2" title={item.taskName}>
+                                      {item.isCritical && item.type !== 'summary' && <div className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0 shadow-sm" title="Ruta Crítica"></div>}
                                       {item.type === 'summary' ? (
-                                          <span className="truncate uppercase text-[10px] tracking-wider">{item.taskName}</span>
+                                          <span className="truncate uppercase text-[10px] tracking-wider text-slate-500">{item.taskName}</span>
                                       ) : (
-                                          <span className="truncate pl-2">{item.taskName}</span>
+                                          <span className="truncate pl-1">{item.taskName}</span>
                                       )}
                                   </div>
-                                  <div className="w-16 text-center text-slate-500 font-mono">{item.duration}d</div>
-                                  <div className="w-20 text-center text-slate-500 text-[10px]">{new Date(item.start).toLocaleDateString()}</div>
-                                  <div className="w-20 text-center text-slate-500 text-[10px]">{new Date(item.end).toLocaleDateString()}</div>
+                                  <div className="w-16 text-center text-slate-500 font-mono text-[11px] border-r border-slate-100 mr-2">{item.duration}d</div>
+                                  <div className="w-20 text-center text-slate-500 text-[10px] font-mono border-r border-slate-100 mr-2">{new Date(item.start).toLocaleDateString()}</div>
+                                  <div className="w-20 text-center text-slate-500 text-[10px] font-mono">{new Date(item.end).toLocaleDateString()}</div>
                               </div>
                           ))}
+                          
+                          {/* Resize Handle */}
+                          <div
+                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-blue-400 transition-colors z-20 opacity-0 group-hover/sidebar:opacity-100"
+                              onMouseDown={startResizing}
+                          />
                       </div>
                   )}
 
@@ -781,6 +872,10 @@ export const Planning: React.FC = () => {
                                   const barColor = item.isCritical ? '#ef4444' : '#3b82f6';
                                   const barOpacity = item.isCritical ? 0.9 : 0.7;
                                   
+                                  // Progress Calculation
+                                  const progress = item.progress || 0;
+                                  const progressWidth = width * (progress / 100);
+                                  
                                   // Text Overflow Logic
                                   const charWidth = 6; // Approx
                                   const textWidth = item.taskName.length * charWidth;
@@ -831,19 +926,28 @@ export const Planning: React.FC = () => {
                                               className="transition-all hover:fill-opacity-100 hover:stroke hover:stroke-slate-600 shadow-sm"
                                           />
                                           
-                                          {/* Progress Inner Bar (Mocked as solid bottom line if progress > 0) */}
-                                          {item.progress > 0 && (
-                                              <rect x={x} y={y + 20} width={width * (item.progress / 100)} height="3" fill="white" fillOpacity="0.5" />
+                                          {/* Progress Bar Overlay */}
+                                          {progress > 0 && (
+                                              <rect 
+                                                  x={x} 
+                                                  y={y + 5} 
+                                                  width={progressWidth} 
+                                                  height="20" 
+                                                  fill="#1e293b" 
+                                                  fillOpacity="0.4" 
+                                                  rx="4" 
+                                                  clipPath={`inset(0 ${width - progressWidth}px 0 0)`}
+                                              />
                                           )}
 
                                           {/* Label */}
                                           {fitsInside ? (
                                               <text x={x + 10} y={y + 19} fontSize="10" fill="white" fontWeight="bold" pointerEvents="none" className="select-none">
-                                                  {item.taskName}
+                                                  {item.taskName} {progress > 0 && `(${progress}%)`}
                                               </text>
                                           ) : (
                                               <text x={x + width + 5} y={y + 19} fontSize="10" fill="#475569" fontWeight="medium">
-                                                  {item.taskName}
+                                                  {item.taskName} {progress > 0 && `(${progress}%)`}
                                               </text>
                                           )}
                                       </g>
@@ -854,29 +958,199 @@ export const Planning: React.FC = () => {
                   </div>
               </div>
           )}
-          
-          <div className="bg-slate-50 p-4 border-t border-slate-200 flex justify-between items-center text-xs">
-              <div className="flex gap-4">
-                  <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 bg-red-500 rounded"></div>
-                      <span>Ruta Crítica</span>
+
+          {viewMode === 'control' && (
+              <div className="flex-1 flex flex-col overflow-hidden">
+                  {/* Control Toolbar */}
+                  <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                          <Clock size={16} className="text-slate-500" />
+                          <span className="text-sm font-bold text-slate-700">Línea Base:</span>
+                          <select 
+                              className="text-sm border border-slate-300 rounded-lg p-1.5 bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                              value={selectedSnapshotId || ''}
+                              onChange={(e) => setSelectedSnapshotId(e.target.value)}
+                          >
+                              <option value="">-- Seleccionar Snapshot --</option>
+                              {snapshots.map(s => (
+                                  <option key={s.id} value={s.id}>{s.name} ({new Date(s.date).toLocaleDateString()})</option>
+                              ))}
+                          </select>
+                      </div>
+                      
+                      {selectedSnapshotId && (() => {
+                          // Inline Calculation for Totals
+                          const controlData = project.items.map(item => {
+                              const task = tasks.find(t => t.id === item.taskId);
+                              if (!task) return null;
+                              const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+                              const unitPrice = analysis.totalUnitCost;
+                              const snapshot = snapshots.find(s => s.id === selectedSnapshotId);
+                              let baseQty = 0;
+                              if (snapshot) {
+                                  const baseItem = snapshot.items.find(i => i.id === item.id) || snapshot.items.find(i => i.taskId === item.taskId);
+                                  if (baseItem) baseQty = baseItem.quantity;
+                              }
+                              const currentCost = item.quantity * unitPrice;
+                              const baselineCost = baseQty * unitPrice;
+                              const progress = item.progress || 0;
+                              const earnedValue = currentCost * (progress / 100);
+                              return { baselineCost, currentCost, earnedValue };
+                          }).filter(Boolean) as any[];
+
+                          const totals = controlData.reduce((acc, item) => ({
+                              baseline: acc.baseline + item.baselineCost,
+                              current: acc.current + item.currentCost,
+                              earned: acc.earned + item.earnedValue
+                          }), { baseline: 0, current: 0, earned: 0 });
+
+                          return (
+                              <div className="flex gap-6 ml-auto">
+                                  <div className="text-right">
+                                      <div className="text-[10px] text-slate-400 uppercase font-bold">Presupuesto Base</div>
+                                      <div className="text-sm font-bold text-slate-600">${totals.baseline.toLocaleString()}</div>
+                                  </div>
+                                  <div className="text-right">
+                                      <div className="text-[10px] text-slate-400 uppercase font-bold">Presupuesto Actual</div>
+                                      <div className="text-sm font-bold text-blue-600">${totals.current.toLocaleString()}</div>
+                                  </div>
+                                  <div className="text-right">
+                                      <div className="text-[10px] text-slate-400 uppercase font-bold">Valor Ganado (EV)</div>
+                                      <div className="text-sm font-bold text-emerald-600">${totals.earned.toLocaleString()}</div>
+                                  </div>
+                                  <div className="text-right">
+                                      <div className="text-[10px] text-slate-400 uppercase font-bold">Desviación</div>
+                                      <div className={`text-sm font-bold ${totals.current - totals.baseline > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                                          ${(totals.current - totals.baseline).toLocaleString()}
+                                      </div>
+                                  </div>
+                              </div>
+                          );
+                      })()}
                   </div>
-                  <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 bg-blue-500 rounded"></div>
-                      <span>Tarea Normal</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                      <div className="w-8 h-2 bg-slate-600 rounded-sm"></div>
-                      <span>Resumen</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 bg-slate-100 border border-slate-200"></div>
-                      <span>Día No Laborable</span>
+
+                  {/* Control Table */}
+                  <div className="flex-1 overflow-auto">
+                      <table className="w-full text-sm text-left border-collapse">
+                          <thead className="bg-slate-50 sticky top-0 z-10 text-[11px] uppercase text-slate-500 font-bold tracking-wide shadow-sm">
+                              <tr>
+                                  <th className="p-2 border-b border-slate-200 pl-4">Tarea / Ítem</th>
+                                  <th className="p-2 border-b border-slate-200 text-center w-12">Und</th>
+                                  <th className="p-2 border-b border-slate-200 text-center bg-slate-100/50 border-l border-slate-200" colSpan={2}>Línea Base</th>
+                                  <th className="p-2 border-b border-slate-200 text-center bg-blue-50/30 border-l border-slate-200" colSpan={2}>Actual</th>
+                                  <th className="p-2 border-b border-slate-200 text-center bg-emerald-50/30 border-l border-slate-200" colSpan={2}>Avance</th>
+                                  <th className="p-2 border-b border-slate-200 text-right border-l border-slate-200 pr-4 w-24">Desviación</th>
+                              </tr>
+                              <tr className="text-[10px] text-slate-400">
+                                  <th className="p-1 border-b border-slate-200"></th>
+                                  <th className="p-1 border-b border-slate-200"></th>
+                                  {/* Baseline Sub-headers */}
+                                  <th className="p-1 border-b border-slate-200 text-right bg-slate-100/50 border-l border-slate-200 font-normal">Cant.</th>
+                                  <th className="p-1 border-b border-slate-200 text-right bg-slate-100/50 font-normal pr-2">Costo</th>
+                                  {/* Actual Sub-headers */}
+                                  <th className="p-1 border-b border-slate-200 text-right bg-blue-50/30 border-l border-slate-200 font-normal">Cant.</th>
+                                  <th className="p-1 border-b border-slate-200 text-right bg-blue-50/30 font-normal pr-2">Costo</th>
+                                  {/* Progress Sub-headers */}
+                                  <th className="p-1 border-b border-slate-200 text-center bg-emerald-50/30 border-l border-slate-200 font-normal">%</th>
+                                  <th className="p-1 border-b border-slate-200 text-right bg-emerald-50/30 font-normal pr-2">Valor Ganado</th>
+                                  {/* Deviation */}
+                                  <th className="p-1 border-b border-slate-200 text-right border-l border-slate-200 font-normal pr-4">Costo</th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                              {project.items.map((item, idx) => {
+                                  const task = tasks.find(t => t.id === item.taskId);
+                                  if (!task) return null;
+
+                                  // Calculate Logic (Repeated for row rendering)
+                                  const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
+                                  const unitPrice = analysis.totalUnitCost;
+                                  
+                                  const snapshot = snapshots.find(s => s.id === selectedSnapshotId);
+                                  let baseQty = 0;
+                                  if (snapshot) {
+                                      const baseItem = snapshot.items.find(i => i.id === item.id) || snapshot.items.find(i => i.taskId === item.taskId);
+                                      if (baseItem) baseQty = baseItem.quantity;
+                                  }
+
+                                  const currentCost = item.quantity * unitPrice;
+                                  const baselineCost = baseQty * unitPrice;
+                                  const deviation = currentCost - baselineCost;
+                                  const progress = item.progress || 0;
+                                  const earnedValue = currentCost * (progress / 100);
+
+                                  return (
+                                      <tr key={item.id} className="hover:bg-slate-50 transition-colors group h-10">
+                                          <td className="px-4 py-2 border-r border-slate-50">
+                                              <div className="font-medium text-slate-700 text-xs truncate max-w-[250px]" title={task.name}>{task.name}</div>
+                                              <div className="text-[10px] text-slate-400 truncate max-w-[200px]">{task.category || 'S/C'}</div>
+                                          </td>
+                                          <td className="px-2 py-2 text-center text-[10px] text-slate-400 font-mono border-r border-slate-50">{task.unit}</td>
+                                          
+                                          {/* Baseline */}
+                                          <td className="px-2 py-2 text-right font-mono text-xs text-slate-500 bg-slate-50/30 border-r border-slate-50">
+                                              {baseQty > 0 ? baseQty.toLocaleString() : '-'}
+                                          </td>
+                                          <td className="px-2 py-2 text-right font-mono text-xs text-slate-500 bg-slate-50/30 border-r border-slate-50">
+                                              {baselineCost > 0 ? `$${baselineCost.toLocaleString()}` : '-'}
+                                          </td>
+
+                                          {/* Actual */}
+                                          <td className="px-2 py-2 text-right font-mono text-xs text-slate-700 bg-blue-50/5 border-r border-slate-50 font-medium">
+                                              {item.quantity.toLocaleString()}
+                                          </td>
+                                          <td className="px-2 py-2 text-right font-mono text-xs text-blue-600 bg-blue-50/5 font-medium">
+                                              ${currentCost.toLocaleString()}
+                                          </td>
+
+                                          {/* Progress */}
+                                          <td className="px-2 py-2 text-center bg-emerald-50/5 border-r border-slate-50">
+                                              <div className="flex items-center justify-center gap-1">
+                                                  <div className="w-12 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                                      <div className="h-full bg-emerald-500" style={{ width: `${progress}%` }}></div>
+                                                  </div>
+                                                  <span className="text-[10px] font-bold text-emerald-700 w-8 text-right">{progress}%</span>
+                                              </div>
+                                          </td>
+                                          <td className="px-2 py-2 text-right font-mono text-xs text-emerald-600 bg-emerald-50/5 font-medium">
+                                              ${earnedValue.toLocaleString()}
+                                          </td>
+
+                                          {/* Deviation */}
+                                          <td className={`px-4 py-2 text-right font-mono text-xs font-bold ${deviation > 0 ? 'text-red-500' : deviation < 0 ? 'text-emerald-500' : 'text-slate-300'}`}>
+                                              {deviation > 0 ? '+' : ''}{deviation !== 0 ? `$${deviation.toLocaleString()}` : '-'}
+                                          </td>
+                                      </tr>
+                                  );
+                              })}
+                          </tbody>
+                      </table>
                   </div>
               </div>
-              <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-800 rounded-lg font-bold border border-blue-200">
-                  <Calculator size={14} />
-                  <span>Fórmula: Duración = Cómputo / (Rendimiento Base × Frentes de Ataque)</span>
+          )}
+          
+          <div className="bg-slate-50 px-3 py-2 border-t border-slate-200 flex justify-between items-center text-[10px] text-slate-500">
+              <div className="flex gap-4">
+                  <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                      <span>Ruta Crítica</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                      <span>Tarea Normal</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                      <div className="w-6 h-1.5 bg-slate-600 rounded-sm"></div>
+                      <span>Resumen</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 bg-slate-200 border border-slate-300"></div>
+                      <span>No Laborable</span>
+                  </div>
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-blue-50 text-blue-700 rounded border border-blue-100">
+                  <Calculator size={10} />
+                  <span>Duración = Cómputo / (Rend. × Frentes)</span>
               </div>
           </div>
       </div>

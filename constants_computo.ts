@@ -1,5 +1,5 @@
 
-import { ComputationTask, Rubro } from '../types';
+import { ComputationTask, Rubro } from './types';
 
 export const COMPUTATION_RUBROS: Rubro[] = [
     { id: "rub_muros", name: "Muros y Tabiques" },

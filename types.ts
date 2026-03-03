@@ -339,7 +339,7 @@ export interface ProjectDocument {
     projectId: string;
     name: string;
     type: 'PLAN' | 'CONTRACT' | 'INVOICE' | 'SPEC' | 'OTHER';
-    format: 'PDF' | 'DWG' | 'XLSX' | 'JPG' | 'IFC';
+    format: 'PDF' | 'DWG' | 'XLSX' | 'JPG' | 'IFC' | 'DOCX';
     uploadDate: string;
     uploadedBy: string; // User ID/Name
     metadata?: Record<string, any>; // Extracted Metadata (Spatial coords, etc)
@@ -453,4 +453,43 @@ export interface ComputationTask {
 export interface Rubro {
     id: string;
     name: string;
+}
+
+export interface ProjectTemplate {
+  id: string;
+  name: string;
+  description: string;
+  rubros: string[];
+  tasks: Partial<Task>[];
+}
+
+export interface ImportResult {
+  success: boolean;
+  message: string;
+  data?: any;
+}
+
+export interface Snapshot {
+    id: string;
+    organizationId: string;
+    projectId: string; // Added projectId
+    name: string;
+    date: string;
+    description?: string;
+    totalCost: number;
+    items: BudgetItem[];
+    materialsSnapshot: Material[];
+    data?: any;
+}
+
+export interface UnitPriceAnalysis {
+    taskId?: string;
+    materialCost: number;
+    laborCost: number;
+    toolCost: number;
+    fixedCost: number;
+    totalUnitCost: number;
+    materials?: any[];
+    labor?: any[];
+    tools?: any[];
 }

@@ -206,7 +206,7 @@ export const BudgetGrid: React.FC = () => {
     },
   ], [updateBudgetItem, totalProjectCost]);
 
-  const table = useReactTable({
+  const table = useReactTable<GridRow>({
     data,
     columns,
     state: { expanded },

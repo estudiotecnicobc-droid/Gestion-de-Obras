@@ -58,8 +58,15 @@ export const BudgetEditor: React.FC = () => {
       showLabSubtotal: true,
       showTotal: true,
       showCategoryHeaders: true,
-      showFooter: true
+      showFooter: true,
+      // NEW OPTIONS
+      paperSize: 'a4', // 'a4', 'letter', 'legal'
+      orientation: 'portrait', // 'portrait', 'landscape'
+      showIcon: false,
+      customText: '',
+      showIncidence: false
   });
+  const [printLogo, setPrintLogo] = useState<string | null>(null);
 
   // --- CALCULATIONS & DATA PREP ---
   const budgetData = useMemo(() => {
@@ -635,6 +642,22 @@ export const BudgetEditor: React.FC = () => {
           {/* PRINT PREVIEW MODAL */}
           {showPrintPreview && (
               <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 print:p-0 print:bg-white print:static">
+                  {/* Dynamic Print Styles */}
+                  <style>
+                    {`
+                        @media print {
+                            @page {
+                                size: ${printOptions.paperSize} ${printOptions.orientation};
+                                margin: 10mm;
+                            }
+                            body {
+                                -webkit-print-color-adjust: exact;
+                                print-color-adjust: exact;
+                            }
+                        }
+                    `}
+                  </style>
+
                   <div className="bg-white w-full max-w-6xl h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col print:h-auto print:w-full print:max-w-none print:shadow-none print:rounded-none">
                       
                       {/* HEADER (Hidden on Print) */}
@@ -657,57 +680,181 @@ export const BudgetEditor: React.FC = () => {
 
                       <div className="flex flex-1 overflow-hidden print:overflow-visible print:h-auto">
                           {/* SIDEBAR CONFIG (Hidden on Print) */}
-                          <div className="w-64 bg-slate-50 border-r border-slate-200 p-4 overflow-y-auto print:hidden">
-                              <h4 className="font-bold text-xs text-slate-500 uppercase mb-4">Opciones de Reporte</h4>
-                              <div className="space-y-3">
-                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                                      <input type="checkbox" checked={printOptions.showQuantity} onChange={e => setPrintOptions({...printOptions, showQuantity: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                      Mostrar Cantidad
-                                  </label>
-                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                                      <input type="checkbox" checked={printOptions.showUnitPrice} onChange={e => setPrintOptions({...printOptions, showUnitPrice: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                      Mostrar Precios Unitarios
-                                  </label>
-                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                                      <input type="checkbox" checked={printOptions.showMatSubtotal} onChange={e => setPrintOptions({...printOptions, showMatSubtotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                      Mostrar Subtotal Materiales
-                                  </label>
-                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                                      <input type="checkbox" checked={printOptions.showLabSubtotal} onChange={e => setPrintOptions({...printOptions, showLabSubtotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                      Mostrar Subtotal Mano de Obra
-                                  </label>
-                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                                      <input type="checkbox" checked={printOptions.showTotal} onChange={e => setPrintOptions({...printOptions, showTotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                      Mostrar Total Ítem
-                                  </label>
-                                  <div className="h-px bg-slate-200 my-2"></div>
-                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                                      <input type="checkbox" checked={printOptions.showCategoryHeaders} onChange={e => setPrintOptions({...printOptions, showCategoryHeaders: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                      Agrupar por Rubros
-                                  </label>
-                                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                                      <input type="checkbox" checked={printOptions.showFooter} onChange={e => setPrintOptions({...printOptions, showFooter: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                      Mostrar Totales Generales
-                                  </label>
+                          <div className="w-80 bg-slate-50 border-r border-slate-200 p-4 overflow-y-auto print:hidden flex flex-col gap-6">
+                              
+                              {/* Page Settings */}
+                              <div>
+                                  <h4 className="font-bold text-xs text-slate-500 uppercase mb-3 flex items-center gap-2">
+                                      <Settings size={12} /> Configuración de Página
+                                  </h4>
+                                  <div className="space-y-3">
+                                      <div>
+                                          <label className="text-xs font-bold text-slate-600 block mb-1">Tamaño de Hoja</label>
+                                          <select 
+                                              className="w-full p-2 text-xs border border-slate-300 rounded bg-white"
+                                              value={printOptions.paperSize}
+                                              onChange={e => setPrintOptions({...printOptions, paperSize: e.target.value})}
+                                          >
+                                              <option value="a4">A4 (210mm x 297mm)</option>
+                                              <option value="letter">Carta (Letter)</option>
+                                              <option value="legal">Oficio (Legal)</option>
+                                          </select>
+                                      </div>
+                                      <div>
+                                          <label className="text-xs font-bold text-slate-600 block mb-1">Orientación</label>
+                                          <div className="flex gap-2">
+                                              <button 
+                                                  onClick={() => setPrintOptions({...printOptions, orientation: 'portrait'})}
+                                                  className={`flex-1 py-2 text-xs font-bold rounded border ${printOptions.orientation === 'portrait' ? 'bg-blue-100 border-blue-300 text-blue-700' : 'bg-white border-slate-300 text-slate-600'}`}
+                                              >
+                                                  Vertical
+                                              </button>
+                                              <button 
+                                                  onClick={() => setPrintOptions({...printOptions, orientation: 'landscape'})}
+                                                  className={`flex-1 py-2 text-xs font-bold rounded border ${printOptions.orientation === 'landscape' ? 'bg-blue-100 border-blue-300 text-blue-700' : 'bg-white border-slate-300 text-slate-600'}`}
+                                              >
+                                                  Horizontal
+                                              </button>
+                                          </div>
+                                      </div>
+                                  </div>
                               </div>
+
+                              {/* Content Options */}
+                              <div>
+                                  <h4 className="font-bold text-xs text-slate-500 uppercase mb-3 flex items-center gap-2">
+                                      <CheckSquare size={12} /> Contenido del Reporte
+                                  </h4>
+                                  <div className="space-y-2">
+                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                          <input type="checkbox" checked={printOptions.showQuantity} onChange={e => setPrintOptions({...printOptions, showQuantity: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                          Mostrar Cantidad
+                                      </label>
+                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                          <input type="checkbox" checked={printOptions.showUnitPrice} onChange={e => setPrintOptions({...printOptions, showUnitPrice: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                          Mostrar Precios Unitarios
+                                      </label>
+                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                          <input type="checkbox" checked={printOptions.showMatSubtotal} onChange={e => setPrintOptions({...printOptions, showMatSubtotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                          Mostrar Subtotal Materiales
+                                      </label>
+                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                          <input type="checkbox" checked={printOptions.showLabSubtotal} onChange={e => setPrintOptions({...printOptions, showLabSubtotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                          Mostrar Subtotal Mano de Obra
+                                      </label>
+                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                          <input type="checkbox" checked={printOptions.showTotal} onChange={e => setPrintOptions({...printOptions, showTotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                          Mostrar Total Ítem
+                                      </label>
+                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded bg-blue-50 border border-blue-100">
+                                          <input type="checkbox" checked={printOptions.showIncidence} onChange={e => setPrintOptions({...printOptions, showIncidence: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                          Mostrar Incidencia %
+                                      </label>
+                                      <div className="h-px bg-slate-200 my-2"></div>
+                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                          <input type="checkbox" checked={printOptions.showCategoryHeaders} onChange={e => setPrintOptions({...printOptions, showCategoryHeaders: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                          Agrupar por Rubros
+                                      </label>
+                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                          <input type="checkbox" checked={printOptions.showFooter} onChange={e => setPrintOptions({...printOptions, showFooter: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                          Mostrar Totales Generales
+                                      </label>
+                                  </div>
+                              </div>
+
+                              {/* Customization */}
+                              <div>
+                                  <h4 className="font-bold text-xs text-slate-500 uppercase mb-3 flex items-center gap-2">
+                                      <Edit3 size={12} /> Personalización
+                                  </h4>
+                                  <div className="space-y-3">
+                                      <div>
+                                          <label className="flex items-center gap-2 text-xs font-bold text-slate-600 mb-2 cursor-pointer">
+                                              <input type="checkbox" checked={printOptions.showIcon} onChange={e => setPrintOptions({...printOptions, showIcon: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                              Incluir Logo / Ícono
+                                          </label>
+                                          {printOptions.showIcon && (
+                                              <div className="flex items-center gap-2">
+                                                  {printLogo && <img src={printLogo} alt="Logo" className="w-8 h-8 object-contain border rounded bg-white" />}
+                                                  <label className="flex-1 cursor-pointer bg-white border border-slate-300 hover:bg-slate-50 text-slate-600 text-xs py-1.5 px-3 rounded text-center transition-colors">
+                                                      Subir Imagen...
+                                                      <input 
+                                                          type="file" 
+                                                          accept="image/*" 
+                                                          className="hidden" 
+                                                          onChange={(e) => {
+                                                              const file = e.target.files?.[0];
+                                                              if (file) {
+                                                                  const reader = new FileReader();
+                                                                  reader.onload = (ev) => setPrintLogo(ev.target?.result as string);
+                                                                  reader.readAsDataURL(file);
+                                                              }
+                                                          }}
+                                                      />
+                                                  </label>
+                                              </div>
+                                          )}
+                                      </div>
+                                      <div>
+                                          <label className="text-xs font-bold text-slate-600 block mb-1">Texto Personalizado (Encabezado)</label>
+                                          <textarea 
+                                              className="w-full p-2 text-xs border border-slate-300 rounded bg-white h-20 resize-none focus:ring-2 focus:ring-blue-500 outline-none"
+                                              placeholder="Ej: Presupuesto válido por 15 días..."
+                                              value={printOptions.customText}
+                                              onChange={e => setPrintOptions({...printOptions, customText: e.target.value})}
+                                          />
+                                      </div>
+                                  </div>
+                              </div>
+
                           </div>
 
                           {/* PREVIEW CONTENT */}
-                          <div className="flex-1 overflow-auto bg-white p-8 print:p-0 print:overflow-visible">
-                              <div className="max-w-[210mm] mx-auto bg-white shadow-sm border border-slate-100 min-h-[297mm] p-8 print:shadow-none print:border-none print:max-w-none print:mx-0 print:p-0">
+                          <div className="flex-1 overflow-auto bg-slate-100 p-8 print:p-0 print:overflow-visible print:bg-white flex justify-center">
+                              <div 
+                                className={`bg-white shadow-lg border border-slate-200 p-8 print:shadow-none print:border-none print:p-0 transition-all duration-300 origin-top`}
+                                style={{
+                                    width: printOptions.paperSize === 'a4' 
+                                        ? (printOptions.orientation === 'portrait' ? '210mm' : '297mm') 
+                                        : printOptions.paperSize === 'legal' 
+                                            ? (printOptions.orientation === 'portrait' ? '216mm' : '356mm')
+                                            : (printOptions.orientation === 'portrait' ? '216mm' : '279mm'), // Letter
+                                    minHeight: printOptions.paperSize === 'a4' 
+                                        ? (printOptions.orientation === 'portrait' ? '297mm' : '210mm') 
+                                        : printOptions.paperSize === 'legal' 
+                                            ? (printOptions.orientation === 'portrait' ? '356mm' : '216mm')
+                                            : (printOptions.orientation === 'portrait' ? '279mm' : '216mm') // Letter
+                                }}
+                              >
                                   
                                   {/* Report Header */}
-                                  <div className="mb-8 border-b-2 border-slate-800 pb-4">
-                                      <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tight">{project.name}</h1>
-                                      <div className="flex justify-between items-end mt-2">
+                                  <div className="mb-6 border-b-2 border-slate-800 pb-4">
+                                      <div className="flex justify-between items-start mb-4">
                                           <div>
+                                              <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tight leading-none mb-1">{project.name}</h1>
                                               <p className="text-sm text-slate-600 font-bold">Cómputo y Presupuesto de Obra</p>
-                                              <p className="text-xs text-slate-500">Fecha de Emisión: {new Date().toLocaleDateString()}</p>
+                                          </div>
+                                          {printOptions.showIcon && printLogo && (
+                                              <img src={printLogo} alt="Project Logo" className="h-16 object-contain" />
+                                          )}
+                                      </div>
+                                      
+                                      <div className="flex justify-between items-end mt-2">
+                                          <div className="text-xs text-slate-500 space-y-1">
+                                              <p><strong>Fecha de Emisión:</strong> {new Date().toLocaleDateString()}</p>
+                                              {project.client && <p><strong>Cliente:</strong> {project.client}</p>}
+                                              {project.address && <p><strong>Ubicación:</strong> {project.address}</p>}
                                           </div>
                                           <div className="text-right">
                                               <p className="text-xs text-slate-400">Generado por Construsoft</p>
                                           </div>
                                       </div>
+
+                                      {printOptions.customText && (
+                                          <div className="mt-4 p-3 bg-slate-50 border border-slate-100 rounded text-xs text-slate-600 italic whitespace-pre-wrap">
+                                              {printOptions.customText}
+                                          </div>
+                                      )}
                                   </div>
 
                                   {/* Report Table */}
@@ -721,6 +868,7 @@ export const BudgetEditor: React.FC = () => {
                                               {printOptions.showMatSubtotal && <th className="py-2 text-right font-bold text-slate-700 w-24">Mat. Total</th>}
                                               {printOptions.showLabSubtotal && <th className="py-2 text-right font-bold text-slate-700 w-24">M.O. Total</th>}
                                               {printOptions.showTotal && <th className="py-2 text-right font-bold text-slate-900 w-28">Total</th>}
+                                              {printOptions.showIncidence && <th className="py-2 text-right font-bold text-slate-900 w-16">% Inc.</th>}
                                           </tr>
                                       </thead>
                                       <tbody>
@@ -728,6 +876,7 @@ export const BudgetEditor: React.FC = () => {
                                               const items = budgetData.grouped[rubro] || [];
                                               if (items.length === 0) return null;
                                               const totals = budgetData.categoryTotals[rubro];
+                                              const rubroIncidence = grandTotals.finalTotal > 0 ? (totals.total / grandTotals.finalTotal) * 100 : 0;
 
                                               return (
                                                   <React.Fragment key={rubro}>
@@ -738,28 +887,33 @@ export const BudgetEditor: React.FC = () => {
                                                               </td>
                                                           </tr>
                                                       )}
-                                                      {items.map((row) => (
-                                                          <tr key={row.item.id} className="border-b border-slate-100 break-inside-avoid">
-                                                              <td className="py-1.5 pr-2">
-                                                                  <div className="font-medium text-slate-800">{row.task.name}</div>
-                                                                  <div className="text-[9px] text-slate-500">{row.task.code}</div>
-                                                              </td>
-                                                              <td className="py-1.5 text-center text-slate-500">{row.task.unit}</td>
-                                                              {printOptions.showQuantity && <td className="py-1.5 text-center font-mono font-bold text-slate-700">{row.item.quantity}</td>}
-                                                              {printOptions.showUnitPrice && <td className="py-1.5 text-right font-mono text-slate-600">${row.analysis.totalUnitCost.toFixed(2)}</td>}
-                                                              {printOptions.showMatSubtotal && <td className="py-1.5 text-right font-mono text-slate-600">${row.totalMatEq.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                              {printOptions.showLabSubtotal && <td className="py-1.5 text-right font-mono text-slate-600">${row.totalLab.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                              {printOptions.showTotal && <td className="py-1.5 text-right font-mono font-bold text-slate-900">${row.totalItem.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                          </tr>
-                                                      ))}
+                                                      {items.map((row) => {
+                                                          const itemIncidence = grandTotals.finalTotal > 0 ? (row.totalItem / grandTotals.finalTotal) * 100 : 0;
+                                                          return (
+                                                            <tr key={row.item.id} className="border-b border-slate-100 break-inside-avoid">
+                                                                <td className="py-1.5 pr-2">
+                                                                    <div className="font-medium text-slate-800">{row.task.name}</div>
+                                                                    <div className="text-[9px] text-slate-500">{row.task.code}</div>
+                                                                </td>
+                                                                <td className="py-1.5 text-center text-slate-500">{row.task.unit}</td>
+                                                                {printOptions.showQuantity && <td className="py-1.5 text-center font-mono font-bold text-slate-700">{row.item.quantity}</td>}
+                                                                {printOptions.showUnitPrice && <td className="py-1.5 text-right font-mono text-slate-600">${row.analysis.totalUnitCost.toFixed(2)}</td>}
+                                                                {printOptions.showMatSubtotal && <td className="py-1.5 text-right font-mono text-slate-600">${row.totalMatEq.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                                {printOptions.showLabSubtotal && <td className="py-1.5 text-right font-mono text-slate-600">${row.totalLab.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                                {printOptions.showTotal && <td className="py-1.5 text-right font-mono font-bold text-slate-900">${row.totalItem.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                                {printOptions.showIncidence && <td className="py-1.5 text-right font-mono text-slate-500 text-[10px]">{itemIncidence.toFixed(2)}%</td>}
+                                                            </tr>
+                                                          );
+                                                      })}
                                                       {printOptions.showCategoryHeaders && (
-                                                          <tr className="break-inside-avoid">
+                                                          <tr className="break-inside-avoid bg-slate-50 border-t border-slate-300">
                                                               <td colSpan={2} className="py-2 text-right font-bold text-[10px] text-slate-500 uppercase">Subtotal {rubro}</td>
                                                               {printOptions.showQuantity && <td></td>}
                                                               {printOptions.showUnitPrice && <td></td>}
-                                                              {printOptions.showMatSubtotal && <td className="py-2 text-right font-mono font-bold text-slate-700 border-t border-slate-300">${totals.mat.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                              {printOptions.showLabSubtotal && <td className="py-2 text-right font-mono font-bold text-slate-700 border-t border-slate-300">${totals.lab.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                              {printOptions.showTotal && <td className="py-2 text-right font-mono font-bold text-slate-900 border-t border-slate-300">${totals.total.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                              {printOptions.showMatSubtotal && <td className="py-2 text-right font-mono font-bold text-slate-700">${totals.mat.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                              {printOptions.showLabSubtotal && <td className="py-2 text-right font-mono font-bold text-slate-700">${totals.lab.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                              {printOptions.showTotal && <td className="py-2 text-right font-mono font-bold text-slate-900">${totals.total.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                              {printOptions.showIncidence && <td className="py-2 text-right font-mono font-bold text-slate-900">{rubroIncidence.toFixed(2)}%</td>}
                                                           </tr>
                                                       )}
                                                   </React.Fragment>

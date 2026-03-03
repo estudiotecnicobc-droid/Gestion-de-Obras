@@ -13,7 +13,7 @@ import { ProjectWizard } from './ProjectWizard';
 const COLORS = ['#0ea5e9', '#22c55e', '#9333ea', '#eab308', '#f97316', '#ef4444'];
 
 export const Dashboard: React.FC = () => {
-  const { project, tasks, materials, yields, tools, toolYields, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, receptions } = useERP();
+  const { project, tasks, materials, yields, tools, toolYields, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, receptions, snapshots } = useERP();
   const [activeView, setActiveView] = useState<'stats' | 'reports'>('stats');
 
   // --- Wizard State ---
@@ -96,6 +96,31 @@ export const Dashboard: React.FC = () => {
 
     if (maxDuration === 0) maxDuration = 30;
 
+    // --- PRE-CALCULATE PHYSICAL PROGRESS HISTORY ---
+    // 1. Map snapshots to { date, earnedValue }
+    const progressHistory = snapshots.map(s => {
+        const earnedValue = s.items.reduce((acc, item) => {
+            const task = tasks.find(t => t.id === item.taskId);
+            if (!task) return acc;
+            // Use current unit prices for consistent "Physical Progress" valuation
+            const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap);
+            return acc + (analysis.totalUnitCost * item.quantity * (item.progress || 0) / 100);
+        }, 0);
+        return { date: new Date(s.date), value: earnedValue };
+    });
+
+    // 2. Add current state
+    const currentEarnedValue = project.items.reduce((acc, item) => {
+        const task = tasks.find(t => t.id === item.taskId);
+        if (!task) return acc;
+        const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap);
+        return acc + (analysis.totalUnitCost * item.quantity * (item.progress || 0) / 100);
+    }, 0);
+    progressHistory.push({ date: new Date(), value: currentEarnedValue });
+
+    // 3. Sort by date
+    progressHistory.sort((a, b) => a.date.getTime() - b.date.getTime());
+
     const points = [];
     const weeks = Math.ceil(maxDuration / 7) + 2;
     const totalBudget = stats.totalCost;
@@ -122,16 +147,22 @@ export const Dashboard: React.FC = () => {
              });
         });
 
+        // Find latest physical progress for this date
+        // We take the last snapshot/point that is <= currentDate
+        const progressPoint = progressHistory.filter(p => p.date <= dateObj).pop();
+        const avanceFisico = progressPoint ? Math.round(progressPoint.value) : 0;
+
         const isFuture = dateObj > new Date();
 
         points.push({
             name: `Sem ${w}`,
             Planificado: Math.round(cumulativePlanned),
             Real: isFuture ? null : Math.round(cumulativeActual),
+            AvanceFisico: isFuture ? null : avanceFisico
         });
     }
     return points;
-  }, [project, tasks, receptions, yieldsIndex, materialsMap, stats]);
+  }, [project, tasks, receptions, yieldsIndex, materialsMap, stats, snapshots]);
 
   // --- RESOURCE HISTOGRAM CALCULATION ---
   const resourceHistogramData = useMemo(() => {
@@ -839,8 +870,11 @@ export const Dashboard: React.FC = () => {
                                                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                                                     <XAxis dataKey="name" fontSize={8} tickLine={false} axisLine={false} />
                                                     <YAxis fontSize={8} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v/1000}k`} />
+                                                    <Tooltip formatter={(value: number) => `$${value.toLocaleString()}`} />
+                                                    <Legend />
                                                     <Area type="monotone" dataKey="Planificado" stroke="#3b82f6" fillOpacity={0.2} fill="#3b82f6" strokeWidth={2} isAnimationActive={false} />
                                                     <Line type="monotone" dataKey="Real" stroke="#ef4444" strokeWidth={2} dot={false} isAnimationActive={false} />
+                                                    <Line type="monotone" dataKey="AvanceFisico" stroke="#10b981" strokeWidth={2} dot={true} isAnimationActive={false} />
                                                 </ComposedChart>
                                             </ResponsiveContainer>
                                         </div>

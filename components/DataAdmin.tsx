@@ -13,6 +13,23 @@ import { GoogleGenAI } from "@google/genai";
 
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
+const InfoTooltip = ({ text, formula }: { text: string, formula?: string }) => (
+  <div className="group relative inline-block ml-1 align-middle">
+    <Info size={14} className="text-slate-400 cursor-help" />
+    <div className="invisible group-hover:visible absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 bg-slate-800 text-white text-xs rounded p-2 z-50 shadow-lg transition-opacity duration-300 opacity-0 group-hover:opacity-100 delay-1000 pointer-events-none">
+      <p className="font-bold mb-1 text-purple-300">Ayuda:</p>
+      <p className="mb-2">{text}</p>
+      {formula && (
+        <div className="bg-slate-900 p-1.5 rounded border border-slate-700">
+            <span className="text-[10px] text-slate-400 block mb-0.5">Fórmula:</span>
+            <code className="font-mono text-[10px] text-green-400">{formula}</code>
+        </div>
+      )}
+      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+    </div>
+  </div>
+);
+
 export const DataAdmin: React.FC = () => {
   const { 
     materials, tasks, tools, laborCategories, rubros, rubroPresets, crews, project, yields, toolYields, 
@@ -24,7 +41,7 @@ export const DataAdmin: React.FC = () => {
     addCrew, updateCrew, removeCrew,
     addRubro, removeRubro,
     addTaskYield, removeTaskYield, addTaskToolYield, removeTaskToolYield,
-    addTaskCrewYield, removeTaskCrewYield,
+    addTaskCrewYield, removeTaskCrewYield, addTaskLaborYield, removeTaskLaborYield,
     // Database Management
     exportDatabase, importDatabase,
     // Indexes
@@ -58,7 +75,7 @@ export const DataAdmin: React.FC = () => {
   const [isNewTask, setIsNewTask] = useState(false); // Track if we are creating a fresh task
 
   const [resourceToAdd, setResourceToAdd] = useState<string>('');
-  const [resourceType, setResourceType] = useState<'material' | 'tool' | 'crew'>('material');
+  const [resourceType, setResourceType] = useState<'material' | 'tool' | 'crew' | 'labor'>('material');
 
   // State for Material Configuration Panel
   const [editingMaterialConfig, setEditingMaterialConfig] = useState<Material | null>(null);
@@ -265,7 +282,7 @@ export const DataAdmin: React.FC = () => {
       
       const distributionData = Object.entries(materialsByCategory)
           .map(([name, value]) => ({ name, value }))
-          .sort((a,b) => b.value - a.value)
+          .sort((a,b) => (b.value as number) - (a.value as number))
           .slice(0, 5);
 
       // 4. Labor Cost Chart Data
@@ -424,10 +441,18 @@ export const DataAdmin: React.FC = () => {
       return crewYield ? { ...crewYield, data: crewsMap[crewYield.crewId] } : null;
   }, [localTask, taskCrewYieldsIndex, crewsMap]);
 
+  const currentAPULabor = useMemo(() => {
+    if (!localTask) return [];
+    return (taskLaborYieldsIndex[localTask.id] || []).map(y => ({
+      ...y,
+      data: laborCategoriesMap[y.laborCategoryId]
+    }));
+  }, [localTask, taskLaborYieldsIndex, laborCategoriesMap]);
+
   const handleAddResourceToAPU = () => {
     if (!localTask || !resourceToAdd) return;
     if (resourceType === 'material') {
-        addTaskYield({ taskId: localTask.id, materialId: resourceToAdd, quantity: 1 });
+        addTaskYield({ taskId: localTask.id, materialId: resourceToAdd, quantity: 1, wastePercent: 0 });
     } else if (resourceType === 'tool') {
         addTaskToolYield({ taskId: localTask.id, toolId: resourceToAdd, hoursPerUnit: 1 });
     } else if (resourceType === 'crew') {
@@ -435,6 +460,8 @@ export const DataAdmin: React.FC = () => {
             removeTaskCrewYield(localTask.id, currentAPUCrew.crewId);
         }
         addTaskCrewYield({ taskId: localTask.id, crewId: resourceToAdd, quantity: 1 });
+    } else if (resourceType === 'labor') {
+        addTaskLaborYield({ taskId: localTask.id, laborCategoryId: resourceToAdd, quantity: 1 });
     }
     setResourceToAdd('');
   };
@@ -1718,7 +1745,10 @@ export const DataAdmin: React.FC = () => {
                 {/* Parameters Grid */}
                 <div className="grid grid-cols-2 gap-4">
                     <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Rendimiento Diario (u/d)</label>
+                        <label className="block text-xs font-bold text-slate-500 mb-1 uppercase flex items-center gap-1">
+                            Rendimiento Diario (u/d)
+                            <InfoTooltip text="Cantidad de unidades que se pueden ejecutar en un día de trabajo." formula="Producción / Jornada" />
+                        </label>
                         <input 
                             type="number"
                             className="w-full p-2 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-purple-500 outline-none"
@@ -1728,7 +1758,10 @@ export const DataAdmin: React.FC = () => {
                         <p className="text-[10px] text-slate-400 mt-1">Unidades por día de trabajo.</p>
                     </div>
                     <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Rendimiento HH (h/u)</label>
+                        <label className="block text-xs font-bold text-slate-500 mb-1 uppercase flex items-center gap-1">
+                            Rendimiento HH (h/u)
+                            <InfoTooltip text="Horas hombre requeridas para producir una unidad." formula="Horas Totales / Cantidad" />
+                        </label>
                         <input 
                             type="number"
                             className="w-full p-2 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-purple-500 outline-none"
@@ -1741,7 +1774,10 @@ export const DataAdmin: React.FC = () => {
 
                 {/* Manual Cost Override */}
                 <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Costo Mano de Obra (Manual)</label>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase flex items-center gap-1">
+                        Costo Mano de Obra (Manual)
+                        <InfoTooltip text="Costo directo de mano de obra por unidad. Si se ingresa, sobrescribe el cálculo automático basado en cuadrillas." />
+                    </label>
                     <div className="flex items-center gap-2">
                         <span className="text-slate-400 font-bold">$</span>
                         <input 
@@ -1762,18 +1798,80 @@ export const DataAdmin: React.FC = () => {
                     
                     {/* Materials */}
                     <div className="mb-4">
-                        <h5 className="text-xs font-bold text-slate-500 uppercase mb-2">Materiales</h5>
+                        <h5 className="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-2">
+                            Materiales
+                            <InfoTooltip text="Insumos necesarios por unidad de tarea." formula="Costo = (Cant. * (1 + Desp.%)) * Precio Unit." />
+                        </h5>
                         <div className="space-y-2">
                             {currentAPUMaterials.map((m: any) => (
-                                <div key={m.materialId} className="flex items-center justify-between text-sm bg-slate-50 p-2 rounded border border-slate-100">
-                                    <span className="font-medium text-slate-700">{m.data?.name || 'Material Desconocido'}</span>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-slate-500">{m.quantity} {m.data?.unit}</span>
+                                <div key={m.materialId} className="flex flex-col gap-2 text-sm bg-slate-50 p-2 rounded border border-slate-100">
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-medium text-slate-700">{m.data?.name || 'Material Desconocido'}</span>
                                         <button onClick={() => removeTaskYield(localTask.id, m.materialId)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label className="text-[10px] text-slate-500 font-bold uppercase flex items-center gap-1">
+                                                Rendimiento
+                                                <InfoTooltip text="Cantidad neta por unidad." />
+                                            </label>
+                                            <div className="flex items-center gap-1">
+                                                <input 
+                                                    type="number" 
+                                                    className="w-full p-1 text-xs border rounded text-right focus:ring-1 focus:ring-blue-500 outline-none"
+                                                    value={m.quantity}
+                                                    onChange={(e) => addTaskYield({ ...m, quantity: parseFloat(e.target.value) || 0 })}
+                                                />
+                                                <span className="text-[10px] text-slate-400 w-8 text-right truncate" title={m.data?.unit}>{m.data?.unit}</span>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] text-slate-500 font-bold uppercase flex items-center gap-1">
+                                                Desp. %
+                                                <InfoTooltip text="Desperdicio estimado." />
+                                            </label>
+                                            <div className="flex items-center gap-1">
+                                                <input 
+                                                    type="number" 
+                                                    className="w-full p-1 text-xs border rounded text-right focus:ring-1 focus:ring-blue-500 outline-none"
+                                                    value={m.wastePercent || 0}
+                                                    onChange={(e) => addTaskYield({ ...m, wastePercent: parseFloat(e.target.value) || 0 })}
+                                                />
+                                                <span className="text-[10px] text-slate-400">%</span>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             ))}
                             {currentAPUMaterials.length === 0 && <p className="text-xs text-slate-400 italic">Sin materiales asignados.</p>}
+                        </div>
+                    </div>
+
+                    {/* Labor (Individual) */}
+                    <div className="mb-4">
+                        <h5 className="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-2">
+                            Mano de Obra (Individual)
+                            <InfoTooltip text="Oficiales o Ayudantes asignados individualmente." formula="Costo = (Cant. * Horas * Valor Hora) / Rendimiento" />
+                        </h5>
+                        <div className="space-y-2">
+                            {currentAPULabor.map((l: any) => (
+                                <div key={l.laborCategoryId} className="flex flex-col gap-2 text-sm bg-slate-50 p-2 rounded border border-slate-100">
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-medium text-slate-700">{l.data?.role || 'Rol Desconocido'}</span>
+                                        <button onClick={() => removeTaskLaborYield(localTask.id, l.laborCategoryId)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+                                    </div>
+                                    <div className="flex items-center justify-between mt-1">
+                                        <label className="text-[10px] text-slate-500 font-bold uppercase">Cantidad (Personas)</label>
+                                        <input 
+                                            type="number" 
+                                            className="w-20 p-1 text-xs border rounded text-right focus:ring-1 focus:ring-blue-500 outline-none"
+                                            value={l.quantity}
+                                            onChange={(e) => addTaskLaborYield({ ...l, quantity: parseFloat(e.target.value) || 0 })}
+                                        />
+                                    </div>
+                                </div>
+                            ))}
+                            {currentAPULabor.length === 0 && <p className="text-xs text-slate-400 italic">Sin mano de obra individual asignada.</p>}
                         </div>
                     </div>
 
@@ -1805,6 +1903,8 @@ export const DataAdmin: React.FC = () => {
                             >
                                 <option value="material">Material</option>
                                 <option value="tool">Equipo</option>
+                                <option value="labor">Mano de Obra</option>
+                                <option value="crew">Cuadrilla</option>
                             </select>
                             <select 
                                 className="flex-[2] text-xs border border-purple-200 rounded p-1.5 focus:outline-none focus:ring-1 focus:ring-purple-500"
@@ -1814,6 +1914,8 @@ export const DataAdmin: React.FC = () => {
                                 <option value="">-- Seleccionar --</option>
                                 {resourceType === 'material' && materials.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                                 {resourceType === 'tool' && tools.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                {resourceType === 'labor' && laborCategories.map(l => <option key={l.id} value={l.id}>{l.role}</option>)}
+                                {resourceType === 'crew' && crews.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                             </select>
                         </div>
                         <button 

@@ -6,15 +6,21 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "lucide-react": "^0.562.0",
-    "react-dom": "^19.2.3",
-    "recharts": "^3.6.0",
-    "react": "^19.2.3",
+    "@google/genai": "^1.39.0",
     "@tanstack/react-table": "8.10.7",
-    "@google/genai": "^1.39.0"
+    "docx-preview": "^0.3.7",
+    "lucide-react": "^0.562.0",
+    "mammoth": "^1.11.0",
+    "pdfjs-dist": "^5.5.207",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-zoom-pan-pinch": "^3.7.0",
+    "recharts": "^3.6.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
