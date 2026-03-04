@@ -8,14 +8,17 @@ import { useERP } from '../context/ERPContext';
 import { Task, TaskYield, TaskToolYield, TaskCrewYield, TaskLaborYield, StandardYields } from '../types';
 import { calculateUnitPrice } from '../services/calculationService';
 
+import { TaskRelations } from './TaskRelations';
+
 interface APUBuilderProps {
-    taskId?: string; // If provided, opens in edit mode for this task
+    taskId?: string; // Master Task ID (Library Mode)
+    budgetItemId?: string; // Project Task ID (Gantt Mode)
     onClose?: () => void;
 }
 
-type TabType = 'general' | 'materials' | 'labor';
+type TabType = 'general' | 'materials' | 'labor' | 'relations';
 
-export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
+export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, budgetItemId, onClose }) => {
   const { 
       tasks, materials, tools, crews, laborCategories, updateTaskMaster,
       yieldsIndex, toolYieldsIndex, taskCrewYieldsIndex, taskLaborYieldsIndex,
@@ -41,17 +44,27 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
 
   // --- INITIALIZATION ---
   useEffect(() => {
-      if (taskId) {
-          const t = tasks.find(x => x.id === taskId);
-          if (t) {
-              setCurrentTask({ ...t });
-              setLocalMaterials(yieldsIndex[taskId] || []);
-              setLocalTools(toolYieldsIndex[taskId] || []);
-              setLocalCrews(taskCrewYieldsIndex[taskId] || []);
-              setLocalLabor(taskLaborYieldsIndex[taskId] || []);
+      let targetMasterId = taskId;
+
+      // If budgetItemId is provided, resolve the Master Task ID from the Project Item
+      if (budgetItemId) {
+          const item = project.items.find(i => i.id === budgetItemId);
+          if (item) {
+              targetMasterId = item.taskId;
           }
       }
-  }, [taskId, tasks]);
+
+      if (targetMasterId) {
+          const t = tasks.find(x => x.id === targetMasterId);
+          if (t) {
+              setCurrentTask({ ...t });
+              setLocalMaterials(yieldsIndex[targetMasterId] || []);
+              setLocalTools(toolYieldsIndex[targetMasterId] || []);
+              setLocalCrews(taskCrewYieldsIndex[targetMasterId] || []);
+              setLocalLabor(taskLaborYieldsIndex[targetMasterId] || []);
+          }
+      }
+  }, [taskId, budgetItemId, tasks, project.items, yieldsIndex, toolYieldsIndex, taskCrewYieldsIndex, taskLaborYieldsIndex]);
 
   // --- DYNAMIC CALCULATIONS ---
   const analysis = useMemo(() => {
@@ -243,12 +256,18 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
             </button>
             <button 
                 onClick={() => setActiveTab('labor')}
-                className={`flex-1 flex items-start gap-3 px-6 py-4 text-sm font-bold border-l-4 transition-all ${activeTab === 'labor' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}
+                className={`flex items-start gap-3 px-6 py-4 text-sm font-bold border-l-4 transition-all ${activeTab === 'labor' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}
             >
                 <div className="flex flex-col gap-1">
                     <div className="flex items-center gap-3"><Users size={18} /> Mano de Obra</div>
                     <span className="text-[10px] font-normal opacity-70 ml-8">Cuadrillas y Oficiales</span>
                 </div>
+            </button>
+            <button 
+                onClick={() => setActiveTab('relations')}
+                className={`flex items-center gap-3 px-6 py-4 text-sm font-bold border-l-4 transition-all ${activeTab === 'relations' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}
+            >
+                <ArrowRightLeft size={18} /> Relaciones
             </button>
         </div>
 
@@ -625,6 +644,23 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                                 })}
                             </tbody>
                         </table>
+                    </div>
+                </div>
+            )}
+
+            {/* TAB: RELATIONS */}
+            {activeTab === 'relations' && (
+                <div className="max-w-3xl space-y-6 animate-in slide-in-from-bottom-2">
+                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                        <h3 className="text-lg font-bold text-slate-800 mb-4">Relaciones y Dependencias</h3>
+                        {budgetItemId ? (
+                            <TaskRelations taskId={budgetItemId} />
+                        ) : (
+                            <div className="p-4 bg-orange-50 border border-orange-100 rounded-lg text-orange-800 text-sm flex items-center gap-2">
+                                <AlertCircle size={16} />
+                                <span>Las relaciones de precedencia solo se pueden editar desde la vista de Planificación (Gantt), ya que dependen del proyecto específico.</span>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

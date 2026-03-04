@@ -218,6 +218,18 @@ export interface Project {
   // NEW: Project Specific Resource Availability
   laborForce?: ProjectLaborDefinition[]; // Available individual workers
   assignedCrews?: ProjectCrewDefinition[]; // Available crews
+
+  // NEW: Centralized Dependencies (Normalized Model)
+  dependencies?: ProjectDependency[];
+}
+
+export interface ProjectDependency {
+  id: string;
+  fromTaskId: string; // Predecessor (The task that must finish/start first)
+  toTaskId: string;   // Successor (The task that depends on the predecessor)
+  type: LinkType;
+  lag: number; // Days
+  note?: string;
 }
 
 export interface BudgetItem {

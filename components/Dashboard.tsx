@@ -156,13 +156,32 @@ export const Dashboard: React.FC = () => {
 
         points.push({
             name: `Sem ${w}`,
-            Planificado: Math.round(cumulativePlanned),
-            Real: isFuture ? null : Math.round(cumulativeActual),
-            AvanceFisico: isFuture ? null : avanceFisico
+            "Valor Planificado (PV)": Math.round(cumulativePlanned),
+            "Costo Real (AC)": isFuture ? null : Math.round(cumulativeActual),
+            "Valor Ganado (EV)": isFuture ? null : avanceFisico
         });
     }
     return points;
   }, [project, tasks, receptions, yieldsIndex, materialsMap, stats, snapshots]);
+
+  // Calculate current EVM metrics
+  const currentMetrics = useMemo(() => {
+      if (sCurveData.length === 0) return null;
+      const lastPoint = [...sCurveData].reverse().find(p => p["Valor Ganado (EV)"] !== null);
+      if (!lastPoint) return null;
+
+      const ev = lastPoint["Valor Ganado (EV)"] || 0;
+      const ac = lastPoint["Costo Real (AC)"] || 0;
+      const pv = lastPoint["Valor Planificado (PV)"] || 0;
+
+      return {
+          ev, ac, pv,
+          sv: ev - pv,
+          cv: ev - ac,
+          spi: pv !== 0 ? ev / pv : 0,
+          cpi: ac !== 0 ? ev / ac : 0
+      };
+  }, [sCurveData]);
 
   // --- RESOURCE HISTOGRAM CALCULATION ---
   const resourceHistogramData = useMemo(() => {
@@ -862,22 +881,52 @@ export const Dashboard: React.FC = () => {
                                     </div>
 
                                     {/* S-Curve */}
-                                    <div className="border border-slate-200 rounded-lg p-4 bg-white">
-                                        <h3 className="text-xs font-bold text-slate-500 uppercase mb-2 text-center">Curva de Inversión (S-Curve)</h3>
-                                        <div className="h-48">
+                                    <div className="border border-slate-200 rounded-lg p-4 bg-white col-span-2 lg:col-span-1">
+                                        <h3 className="text-xs font-bold text-slate-500 uppercase mb-2 text-center">Curva S - Valor Ganado</h3>
+                                        <div className="h-48 mb-4">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <ComposedChart data={sCurveData}>
                                                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                                                     <XAxis dataKey="name" fontSize={8} tickLine={false} axisLine={false} />
                                                     <YAxis fontSize={8} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v/1000}k`} />
                                                     <Tooltip formatter={(value: number) => `$${value.toLocaleString()}`} />
-                                                    <Legend />
-                                                    <Area type="monotone" dataKey="Planificado" stroke="#3b82f6" fillOpacity={0.2} fill="#3b82f6" strokeWidth={2} isAnimationActive={false} />
-                                                    <Line type="monotone" dataKey="Real" stroke="#ef4444" strokeWidth={2} dot={false} isAnimationActive={false} />
-                                                    <Line type="monotone" dataKey="AvanceFisico" stroke="#10b981" strokeWidth={2} dot={true} isAnimationActive={false} />
+                                                    <Legend wrapperStyle={{ fontSize: '10px' }} />
+                                                    <Area type="monotone" dataKey="Valor Planificado (PV)" stroke="#94a3b8" fillOpacity={0.1} fill="#94a3b8" strokeWidth={2} isAnimationActive={false} />
+                                                    <Line type="monotone" dataKey="Costo Real (AC)" stroke="#ef4444" strokeWidth={2} dot={false} isAnimationActive={false} />
+                                                    <Line type="monotone" dataKey="Valor Ganado (EV)" stroke="#10b981" strokeWidth={2} dot={true} isAnimationActive={false} />
                                                 </ComposedChart>
                                             </ResponsiveContainer>
                                         </div>
+                                        
+                                        {/* EVM Metrics Summary */}
+                                        {currentMetrics && (
+                                            <div className="grid grid-cols-4 gap-2 text-[10px] border-t border-slate-100 pt-2">
+                                                <div className="text-center">
+                                                    <div className="text-slate-400">SV (Desvío Cronograma)</div>
+                                                    <div className={`font-bold ${currentMetrics.sv >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                        ${Math.round(currentMetrics.sv).toLocaleString()}
+                                                    </div>
+                                                </div>
+                                                <div className="text-center">
+                                                    <div className="text-slate-400">CV (Desvío Costo)</div>
+                                                    <div className={`font-bold ${currentMetrics.cv >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                        ${Math.round(currentMetrics.cv).toLocaleString()}
+                                                    </div>
+                                                </div>
+                                                <div className="text-center">
+                                                    <div className="text-slate-400">SPI (Eficiencia Cronograma)</div>
+                                                    <div className={`font-bold ${currentMetrics.spi >= 1 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                        {currentMetrics.spi.toFixed(2)}
+                                                    </div>
+                                                </div>
+                                                <div className="text-center">
+                                                    <div className="text-slate-400">CPI (Eficiencia Costo)</div>
+                                                    <div className={`font-bold ${currentMetrics.cpi >= 1 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                        {currentMetrics.cpi.toFixed(2)}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>

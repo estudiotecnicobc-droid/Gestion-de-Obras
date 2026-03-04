@@ -7,48 +7,29 @@ import {
   ChevronsRight, Users, Check, Layout, List, PenTool,
   ZoomIn, ZoomOut, MoveRight, Sidebar, Download, Printer, FileText, ChevronLeft, ChevronRight, DollarSign, TrendingUp
 } from 'lucide-react';
-import { LinkType } from '../types';
+import { LinkType, ProjectDependency } from '../types';
 import { APUBuilder } from './APUBuilder';
+import { ResizableSplitPane } from './ResizableSplitPane';
 
 export const Planning: React.FC = () => {
   const { 
     project, tasks, updateBudgetItem,
     yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, 
     taskCrewYieldsIndex, crewsMap, laborCategoriesMap,
-    createSnapshot, snapshots, measurementSheets // Added measurementSheets
+    createSnapshot, snapshots, measurementSheets, // Added measurementSheets
+    addDependency, removeDependency
   } = useERP();
   
   // --- UI STATE ---
   const [viewMode, setViewMode] = useState<'table' | 'gantt' | 'control'>('table');
-  const [editingApuId, setEditingApuId] = useState<string | null>(null);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   
   // Gantt Specific State
   const [timeScale, setTimeScale] = useState<'day' | 'week' | 'month' | 'quarter' | 'project'>('day');
   const [showSidebar, setShowSidebar] = useState(true);
-  const [sidebarWidth, setSidebarWidth] = useState(450); // Resizable sidebar width
   const [ganttScale, setGanttScale] = useState(40); // Pixels per day
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  
-  // Resizing Handler
-  const startResizing = (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = sidebarWidth;
-
-      const onMouseMove = (e: MouseEvent) => {
-          const newWidth = startWidth + (e.clientX - startX);
-          setSidebarWidth(Math.max(250, Math.min(800, newWidth)));
-      };
-
-      const onMouseUp = () => {
-          document.removeEventListener('mousemove', onMouseMove);
-          document.removeEventListener('mouseup', onMouseUp);
-      };
-
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
-  };
   
   // Collapsed Summaries State
   const [collapsedSummaries, setCollapsedSummaries] = useState<Set<string>>(new Set());
@@ -85,6 +66,29 @@ export const Planning: React.FC = () => {
           createSnapshot(name, currentTotal);
       }
   };
+
+  // --- DEPENDENCY NORMALIZATION ---
+  const allDependencies = useMemo(() => {
+      if (project.dependencies && project.dependencies.length > 0) {
+          return project.dependencies;
+      }
+      // Fallback extraction
+      const extracted: ProjectDependency[] = [];
+      project.items.forEach(item => {
+          if (item.dependencies) {
+              item.dependencies.forEach(d => {
+                  extracted.push({
+                      id: `${item.id}-${d.predecessorId}`,
+                      fromTaskId: d.predecessorId,
+                      toTaskId: item.id,
+                      type: d.type,
+                      lag: d.lag
+                  });
+              });
+          }
+      });
+      return extracted;
+  }, [project.dependencies, project.items]);
 
   // --- 1. SCHEDULING ENGINE (FORWARD PASS) ---
   const scheduledItems = useMemo(() => {
@@ -126,17 +130,42 @@ export const Planning: React.FC = () => {
         // Predecessor Logic (Early Start)
         let startDate = item.startDate || project.startDate;
 
-        if (item.dependencies && item.dependencies.length > 0) {
+        // Use Normalized Dependencies
+        const itemPredecessors = allDependencies.filter(d => d.toTaskId === item.id);
+
+        if (itemPredecessors.length > 0) {
           let maxStartDate = new Date(project.startDate).getTime();
           let allDepsReady = true;
 
-          item.dependencies.forEach(dep => {
-            const pred = getProcessedItem(dep.predecessorId);
+          itemPredecessors.forEach(dep => {
+            const pred = getProcessedItem(dep.fromTaskId);
             if (!pred) { allDepsReady = false; return; }
             
             const predEnd = new Date(pred.end).getTime();
-            // Default FS (Finish-to-Start) logic: Start next working day
-            const calculatedStart = predEnd + 86400000; 
+            const predStart = new Date(pred.start).getTime();
+            
+            let calculatedStart = predEnd;
+
+            // Handle Link Types
+            if (dep.type === LinkType.SS) {
+                calculatedStart = predStart;
+            } else if (dep.type === LinkType.FF) {
+                calculatedStart = predEnd - (duration * 86400000); 
+            } else if (dep.type === LinkType.SF) {
+                calculatedStart = predStart - (duration * 86400000);
+            } else {
+                // FS (Default)
+                calculatedStart = predEnd;
+            }
+
+            // Add Lag (Days to Ms)
+            calculatedStart += (dep.lag || 0) * 86400000;
+            
+            // Default FS gap (1 day)
+            if (dep.type === LinkType.FS || !dep.type) {
+                 calculatedStart += 86400000;
+            }
+
             maxStartDate = Math.max(maxStartDate, calculatedStart);
           });
 
@@ -172,7 +201,7 @@ export const Planning: React.FC = () => {
     }
     
     return results.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-  }, [project, tasks, workingDays, nonWorkingDates, workdayHours, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap]);
+  }, [project, tasks, workingDays, nonWorkingDates, workdayHours, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, allDependencies]);
 
   // --- 2. CRITICAL PATH METHOD (BACKWARD PASS) ---
   const cpmItems = useMemo(() => {
@@ -190,10 +219,10 @@ export const Planning: React.FC = () => {
       const successors: Record<string, string[]> = {};
       scheduledItems.forEach(item => {
           if(!successors[item.id]) successors[item.id] = [];
-          item.dependencies?.forEach(dep => {
-              if(!successors[dep.predecessorId]) successors[dep.predecessorId] = [];
-              successors[dep.predecessorId].push(item.id);
-          });
+      });
+      allDependencies.forEach(dep => {
+          if(!successors[dep.fromTaskId]) successors[dep.fromTaskId] = [];
+          successors[dep.fromTaskId].push(dep.toTaskId);
       });
 
       // 4. Backward Pass
@@ -421,8 +450,19 @@ export const Planning: React.FC = () => {
   };
 
   const handleSetPredecessor = (itemId: string, predId: string) => {
-      const deps = predId ? [{ predecessorId: predId, type: LinkType.FS, lag: 0 }] : [];
-      updateBudgetItem(itemId, { dependencies: deps });
+      // Remove existing predecessors (Single select logic)
+      const existing = allDependencies.filter(d => d.toTaskId === itemId);
+      existing.forEach(d => removeDependency(d.id));
+      
+      if (predId) {
+          addDependency({
+              id: crypto.randomUUID(),
+              fromTaskId: predId,
+              toTaskId: itemId,
+              type: LinkType.FS,
+              lag: 0
+          });
+      }
   };
 
   return (
@@ -570,7 +610,7 @@ export const Planning: React.FC = () => {
                                               <div className="text-[9px] text-slate-400 font-normal">{item.category}</div>
                                           </div>
                                       </div>
-                                      <button onClick={() => setEditingApuId(item.taskId)} className="text-purple-300 hover:text-purple-600 opacity-0 group-hover:opacity-100 transition-opacity" title="Ajustar Rendimiento Maestro">
+                                      <button onClick={() => setEditingItemId(item.id)} className="text-purple-300 hover:text-purple-600 opacity-0 group-hover:opacity-100 transition-opacity" title="Ajustar Rendimiento Maestro">
                                           <PenTool size={14} />
                                       </button>
                                   </td>
@@ -647,7 +687,7 @@ export const Planning: React.FC = () => {
                                   <td className="p-2 text-center">
                                       <select 
                                         className="w-full p-1 border border-slate-200 rounded text-[10px] text-slate-600 truncate"
-                                        value={item.dependencies?.[0]?.predecessorId || ''}
+                                        value={allDependencies.find(d => d.toTaskId === item.id)?.fromTaskId || ''}
                                         onChange={(e) => handleSetPredecessor(item.id, e.target.value)}
                                       >
                                           <option value="">-- Inicio --</option>
@@ -680,12 +720,12 @@ export const Planning: React.FC = () => {
           ) : (
               // --- GANTT CHART RENDERER ---
               <div className="flex-1 flex overflow-hidden">
-                  {/* SIDEBAR: Task List */}
-                  {showSidebar && (
-                      <div 
-                          className="flex-shrink-0 border-r border-slate-200 bg-white overflow-y-auto flex flex-col print:hidden relative group/sidebar"
-                          style={{ width: sidebarWidth }}
-                      >
+                  {showSidebar ? (
+                      <ResizableSplitPane
+                          storageKey="planning-gantt-sidebar"
+                          initialLeftWidth={450}
+                          left={
+                              <div className="h-full bg-white overflow-y-auto flex flex-col print:hidden">
                           <div className="h-10 bg-slate-100 border-b border-slate-200 flex items-center px-4 text-[11px] font-bold text-slate-600 uppercase sticky top-0 z-10 tracking-wide">
                               <div className="w-10 text-center border-r border-slate-200/50 mr-2">ID</div>
                               <div className="flex-1 px-2 border-r border-slate-200/50 mr-2">Tarea</div>
@@ -697,7 +737,7 @@ export const Planning: React.FC = () => {
                               <div 
                                   key={item.id} 
                                   className={`h-10 flex items-center px-4 border-b border-slate-100 hover:bg-slate-50 text-xs group cursor-pointer transition-colors ${item.type === 'summary' ? 'bg-slate-50 font-bold text-slate-800' : 'text-slate-600'} ${item.isCritical && item.type !== 'summary' ? 'bg-red-50/20' : ''}`}
-                                  onClick={() => item.type !== 'summary' && setEditingApuId(item.taskId)}
+                                  onClick={() => item.type !== 'summary' && setEditingItemId(item.id)}
                               >
                                   <div className="w-10 text-center text-slate-400 font-mono text-[10px] border-r border-slate-100 mr-2">{item.index || ''}</div>
                                   <div className="flex-1 truncate font-medium px-2 flex items-center gap-2 border-r border-slate-100 mr-2" title={item.taskName}>
@@ -714,16 +754,10 @@ export const Planning: React.FC = () => {
                               </div>
                           ))}
                           
-                          {/* Resize Handle */}
-                          <div
-                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-blue-400 transition-colors z-20 opacity-0 group-hover/sidebar:opacity-100"
-                              onMouseDown={startResizing}
-                          />
-                      </div>
-                  )}
-
-                  {/* CHART AREA */}
-                  <div className="flex-1 overflow-auto bg-slate-50 relative print:overflow-visible" ref={scrollContainerRef}>
+                              </div>
+                          }
+                          right={
+                              <div className="h-full overflow-auto bg-slate-50 relative print:overflow-visible" ref={scrollContainerRef}>
                       <div className="absolute top-0 left-0 min-w-full h-full print:static">
                           {/* SVG Canvas */}
                           <svg 
@@ -882,11 +916,11 @@ export const Planning: React.FC = () => {
                                   const fitsInside = width > textWidth + 10;
 
                                   return (
-                                      <g key={item.id} className="group cursor-pointer" onClick={() => setEditingApuId(item.taskId)}>
+                                      <g key={item.id} className="group cursor-pointer" onClick={() => setEditingItemId(item.id)}>
                                           <title>{item.taskName} - {item.duration} días</title>
                                           {/* Dependency Lines */}
-                                          {item.dependencies?.map((dep, depIdx) => {
-                                              const pred = ganttItems.find(p => p.id === dep.predecessorId);
+                                          {allDependencies.filter(d => d.toTaskId === item.id).map((dep, depIdx) => {
+                                              const pred = ganttItems.find(p => p.id === dep.fromTaskId);
                                               if (!pred) return null;
                                               
                                               // Find predator index/position
@@ -956,6 +990,15 @@ export const Planning: React.FC = () => {
                           </svg>
                       </div>
                   </div>
+                          }
+                      />
+                  ) : (
+                      <div className="flex-1 overflow-auto bg-slate-50 relative" ref={scrollContainerRef}>
+                          <div className="p-10 flex justify-center items-center h-full text-slate-400">
+                              <p>Sidebar oculto. Active el sidebar para ver la lista de tareas.</p>
+                          </div>
+                      </div>
+                  )}
               </div>
           )}
 
@@ -1155,10 +1198,10 @@ export const Planning: React.FC = () => {
           </div>
       </div>
 
-      {editingApuId && (
+      {editingItemId && (
           <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-white w-full max-w-5xl h-[90vh] rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95">
-                  <APUBuilder taskId={editingApuId} onClose={() => setEditingApuId(null)} />
+                  <APUBuilder budgetItemId={editingItemId} onClose={() => setEditingItemId(null)} />
               </div>
           </div>
       )}
