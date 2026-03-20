@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
+import { generateId } from '../utils/generateId';
 import { 
   Truck, Camera, Search, Plus, CheckCircle, AlertTriangle, 
   Package, ChevronRight, X, Image as ImageIcon, ClipboardList, 
@@ -76,7 +77,7 @@ export const MaterialReception: React.FC = () => {
       }
 
       const newReception: Reception = {
-          id: crypto.randomUUID(),
+          id: generateId(),
           organizationId: 'org_a',
           date: new Date().toISOString(),
           projectId: project.id,

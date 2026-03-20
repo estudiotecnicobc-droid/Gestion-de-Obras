@@ -1,8 +1,7 @@
-
 import { useState, useEffect, useRef } from 'react';
 
 export function usePersistentState<T>(key: string, initialValue: T) {
-  // Use a ref to track if it's the initial mount to prevent double-saving logic issues in StrictMode
+  // Guard para saltar la escritura del mount inicial (el valor ya viene de localStorage)
   const isMounted = useRef(false);
 
   const [state, setState] = useState<T>(() => {
@@ -19,6 +18,12 @@ export function usePersistentState<T>(key: string, initialValue: T) {
   });
 
   useEffect(() => {
+    // En el primer render el estado ya fue leído de localStorage: no reescribir.
+    // Esto también evita la doble escritura de React StrictMode en desarrollo.
+    if (!isMounted.current) {
+      isMounted.current = true;
+      return;
+    }
     try {
       const serializedState = JSON.stringify(state);
       localStorage.setItem(key, serializedState);

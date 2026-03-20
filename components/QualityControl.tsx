@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useERP } from '../context/ERPContext';
+import { generateId } from '../utils/generateId';
 import { useAuth } from '../context/AuthContext';
 import { 
   ClipboardCheck, CheckCircle2, XCircle, AlertTriangle, FileText, 
@@ -76,7 +77,7 @@ export const QualityControl: React.FC = () => {
       }
 
       const newInspection: QualityInspection = {
-          id: crypto.randomUUID(),
+          id: generateId(),
           organizationId: user?.organizationId || 'org_a',
           projectId: project.id,
           taskId: selectedTaskForInspection, // Currently BudgetItem ID in context of page, but ideally taskId reference
@@ -94,7 +95,7 @@ export const QualityControl: React.FC = () => {
       if (status === 'failed') {
           if(confirm('La inspección resultó "Rechazada". ¿Desea abrir una No Conformidad ahora?')) {
               const nc: NonConformity = {
-                  id: crypto.randomUUID(),
+                  id: generateId(),
                   organizationId: user?.organizationId || 'org_a',
                   projectId: project.id,
                   inspectionId: newInspection.id,

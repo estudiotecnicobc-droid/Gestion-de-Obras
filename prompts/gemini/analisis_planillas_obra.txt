@@ -1,0 +1,79 @@
+Actúa como analista funcional experto en construcción, cómputos métricos y presupuestos de obra.
+
+Voy a darte acceso a planillas y documentos que uso actualmente para:
+- cómputos
+- análisis de precios unitarios
+- presupuestos
+- rendimientos
+- materiales, mano de obra y equipos
+
+Quiero que analices estos archivos y produzcas una especificación funcional clara para convertirlos en software.
+
+Necesito:
+
+1. Inventario de archivos
+- nombre
+- propósito
+- hojas relevantes
+- tipo de contenido
+
+2. Entidades detectadas
+- materiales
+- mano de obra
+- equipos
+- cuadrillas
+- tareas
+- rubros
+- APU
+- ítems de presupuesto
+- proyecto
+- unidades
+- rendimientos
+
+3. Fórmulas clave
+- identificar fórmulas importantes
+- explicar qué calcula cada una
+- indicar inputs y outputs
+
+4. Reglas de negocio
+- redondeos
+- desperdicios
+- unidades
+- estructura de presupuesto
+- relaciones entre rubros
+- criterios de cálculo
+
+5. Modelo de datos propuesto
+- tablas sugeridas
+- campos
+- relaciones
+
+6. Algoritmos de cálculo
+- costo de materiales
+- costo de mano de obra
+- costo de equipos
+- precio unitario de tarea
+- presupuesto total
+
+7. Casos de prueba
+- 5 a 10 ejemplos reales de input/output
+
+8. Recomendaciones para implementación
+- qué debe ser dato maestro
+- qué debe ser dato del proyecto
+- qué debe ser función pura
+- qué debería configurarse desde UI
+
+Formato de salida:
+1) inventario
+2) entidades
+3) fórmulas
+4) reglas
+5) modelo de datos
+6) algoritmos
+7) casos de prueba
+8) recomendaciones
+
+---
+
+[ADJUNTAR ARCHIVOS AQUÍ]

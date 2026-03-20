@@ -1,24 +1,41 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { printDocument } from '../utils/printDocument';
+import { generateId } from '../utils/generateId';
 import { useERP } from '../context/ERPContext';
 import { calculateUnitPrice } from '../services/calculationService';
-import { 
-  Trash2, Plus, Search, Settings, Save, CheckSquare, Square, 
+import {
+  Trash2, Plus, Search, Settings, CheckSquare, Square,
   ArrowRight, Printer, Calculator, ChevronDown, ChevronRight,
-  Info, RefreshCcw, DollarSign, Clock, X, Package, Hammer, Edit3, AlertCircle, PenTool, Sparkles
+  Info, RefreshCcw, DollarSign, Clock, X, Package, Hammer, Edit3, AlertCircle, PenTool, Sparkles,
+  BookOpen, LayoutGrid,
 } from 'lucide-react';
-import { Task, ProjectTemplate } from '../types';
+import { BusinessConfig, Task, ProjectTemplate, MasterTaskMaterial, MasterTaskLabor, MasterTaskEquipment } from '../types';
+import { useBudgetTemplates } from '../hooks/useBudgetTemplates';
+import { BudgetCostComparisonPanel } from '../src/features/budgets/components/BudgetCostComparisonPanel';
 import { PROJECT_TEMPLATES } from '../constants';
 import { APUBuilder } from './APUBuilder';
+import { useMasterTasks } from '../hooks/useMasterTasks';
+import { buildRubroImportPayloads } from '../services/importMasterRubro';
+import { buildImportPayload } from '../services/importMasterTask';
+import { BudgetBusinessPanel } from './BudgetBusinessPanel';
+import { useBudgetKStore, selectBusinessConfig, computeBudgetKSummary } from '../store/useBudgetKStore';
+import { computeBudgetItemSaleBreakdown, BudgetItemSaleBreakdown, ItemDirectCostInput } from '../services/budgetItemBreakdown';
+import { projectsService } from '../services/projectsService';
 
 export const BudgetEditor: React.FC = () => {
-  const { 
+  const {
     project, tasks, rubros, rubroPresets,
+    materials: projectMaterials,
     addBudgetItem, removeBudgetItem, updateBudgetItem, updateTask, addTask,
+    addMaterial, addTaskYield, addTaskLaborYield, addTaskToolYield,
     addRubroPreset, removeRubroPreset,
-    yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, 
+    yieldsIndex, materialsMap, toolYieldsIndex, toolsMap,
     taskCrewYieldsIndex, crewsMap, laborCategoriesMap, taskLaborYieldsIndex,
-    loadTemplate
+    loadTemplate,
+    updateProjectSettings,
+    budgetItemsLoading,
+    tasksLoaded,
   } = useERP();
 
   // --- UI STATES ---
@@ -27,7 +44,23 @@ export const BudgetEditor: React.FC = () => {
   const [globalAdjustment, setGlobalAdjustment] = useState<number>(0); 
   const [expandedRubros, setExpandedRubros] = useState<Set<string>>(new Set(rubros)); 
   const [managePresetsMode, setManagePresetsMode] = useState(false);
+  const [showKPanel, setShowKPanel] = useState(false);
+
+  // ── Persistencia del Cuadro Empresario ───────────────────────────────────────
+  // Doble escritura intencional:
+  //  1. projectsService.update() → Supabase real (awaitable, propaga error)
+  //  2. updateProjectSettings()  → optimistic update en ERPContext (UI inmediata)
+  const handleSaveBusinessConfig = useCallback(
+    async (config: BusinessConfig): Promise<void> => {
+      await projectsService.update(project.id, { businessConfig: config });
+      updateProjectSettings({ businessConfig: config });
+    },
+    [project.id, updateProjectSettings],
+  );
   const [newPresetName, setNewPresetName] = useState('');
+
+  // Ref para awaitar el INSERT de tarea nueva antes de insertar el budget_item (evita FK violation).
+  const pendingTaskRef = useRef<Promise<void> | null>(null);
 
   // --- CONFIG PANEL STATE (Quick Add/Edit Item) ---
   const [configPanel, setConfigPanel] = useState<{
@@ -45,12 +78,171 @@ export const BudgetEditor: React.FC = () => {
       quantity: 1
   });
 
+  // --- WIZARD STATE ---
+  const [wizardDismissed, setWizardDismissed] = useState(false);
+  useEffect(() => setWizardDismissed(false), [project.id]);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle');
+  const [wizardRubroOpen, setWizardRubroOpen] = useState(false);
+  const [wizardSelectedRubro, setWizardSelectedRubro] = useState('');
+  const [wizardTemplateOpen, setWizardTemplateOpen] = useState(false);
+  const [wizardSelectedTemplateId, setWizardSelectedTemplateId] = useState('');
+  const [wizardTemplateMsg, setWizardTemplateMsg] = useState('');
+
+  // writePayload es async: espera que la Task exista en Supabase antes de insertar
+  // el BudgetItem, evitando la violación de FK que causaba pérdida de datos en recarga.
+  const writePayload = async (p: ReturnType<typeof buildImportPayload>): Promise<void> => {
+    p.materialsToCreate.forEach(m => addMaterial(m));
+    try {
+      await addTask(p.task); // espera confirmación Supabase antes de linkar el budget_item
+    } catch (err) {
+      // Task no persistió → no insertar yields ni budget_item para evitar FK inválida.
+      // La task quedó en local state (optimistic) pero desaparecerá al recargar.
+      console.error('[writePayload] Falló el insert de tarea — se cancela el payload:', err);
+      return;
+    }
+    p.taskYields.forEach(ty => addTaskYield(ty));
+    p.laborYields.forEach(ly => addTaskLaborYield(ly));
+    p.toolYields.forEach(ty => addTaskToolYield(ty));
+    addBudgetItem(p.budgetItem);
+  };
+
+  const handleWizardRubroImport = async () => {
+    if (project.id === '__phantom__' || !wizardSelectedRubro) return;
+    const { payloads } = buildRubroImportPayloads(
+      wizardSelectedRubro, masterTasks, project.organizationId, project.id,
+      laborCategoriesMap, toolsMap, projectMaterials,
+    );
+    // for...of para serializar: cada task persiste antes de que empiece la siguiente.
+    for (const p of payloads) {
+      await writePayload(p);
+    }
+    setWizardDismissed(true);
+  };
+
+  const handleWizardLibraryImport = async () => {
+    if (project.id === '__phantom__') return;
+    let runningMaterials = [...projectMaterials];
+    for (const masterTask of masterTasks) {
+      const p = buildImportPayload(
+        masterTask, project.organizationId, project.id, 1,
+        laborCategoriesMap, toolsMap, runningMaterials,
+      );
+      runningMaterials = [...runningMaterials, ...p.materialsToCreate];
+      await writePayload(p);
+    }
+    setWizardDismissed(true);
+  };
+
+  // --- MASTER TASKS & TEMPLATES ---
+  const { add: addToMaster, tasks: masterTasks } = useMasterTasks(project.organizationId);
+  const { templates: budgetTemplates } = useBudgetTemplates(project.organizationId);
+
+  const handleWizardTemplateImport = async () => {
+    if (project.id === '__phantom__' || !wizardSelectedTemplateId) return;
+    const template = budgetTemplates.find(t => t.id === wizardSelectedTemplateId);
+    if (!template) return;
+
+    const sorted = [...template.items].sort((a, b) => a.sortOrder - b.sortOrder);
+    let runningMaterials = [...projectMaterials];
+    const skipped: string[] = [];
+
+    // for...of serializado: cada task persiste en Supabase antes de que empiece la siguiente.
+    // Sin await, los INSERTs corren en paralelo y el budget_item puede violar la FK de task_id.
+    for (const item of sorted) {
+      const masterTask = masterTasks.find(t => t.id === item.masterTaskId);
+      if (!masterTask) {
+        skipped.push(item.masterTaskId);
+        continue;
+      }
+      const qty = item.quantity ?? 1;
+      const p = buildImportPayload(
+        masterTask, project.organizationId, project.id, qty,
+        laborCategoriesMap, toolsMap, runningMaterials,
+      );
+      runningMaterials = [...runningMaterials, ...p.materialsToCreate];
+      await writePayload(p);
+    }
+
+    if (skipped.length > 0) {
+      setWizardTemplateMsg(`Plantilla aplicada. ${skipped.length} tarea${skipped.length !== 1 ? 's' : ''} no encontrada${skipped.length !== 1 ? 's' : ''} en la base maestra y fue${skipped.length !== 1 ? 'ron' : ''} salteada${skipped.length !== 1 ? 's' : ''}.`);
+    } else {
+      setWizardDismissed(true);
+    }
+  };
+  const [savedToMasterIds, setSavedToMasterIds] = useState<Set<string>>(new Set());
+
+  const handleSaveToMaster = (task: Task) => {
+    const materials: MasterTaskMaterial[] = (yieldsIndex[task.id] ?? [])
+      .map(ty => {
+        const mat = materialsMap[ty.materialId];
+        if (!mat) return null;
+        return {
+          id: generateId(),
+          materialName: mat.name,
+          unit: mat.unit,
+          quantity: ty.quantity,
+          wastePercent: ty.wastePercent,
+          lastKnownUnitPrice: mat.cost,
+        };
+      })
+      .filter(Boolean) as MasterTaskMaterial[];
+
+    const labor: MasterTaskLabor[] = (taskLaborYieldsIndex[task.id] ?? [])
+      .map(ly => {
+        const cat = laborCategoriesMap[ly.laborCategoryId];
+        if (!cat) return null;
+        return {
+          id: generateId(),
+          laborCategoryId: ly.laborCategoryId,
+          laborCategoryName: cat.role,
+          quantity: ly.quantity,
+        };
+      })
+      .filter(Boolean) as MasterTaskLabor[];
+
+    const equipment: MasterTaskEquipment[] = (toolYieldsIndex[task.id] ?? [])
+      .map(ty => {
+        const tool = toolsMap[ty.toolId];
+        if (!tool) return null;
+        return {
+          id: generateId(),
+          toolId: ty.toolId,
+          toolName: tool.name,
+          hoursPerUnit: ty.hoursPerUnit,
+        };
+      })
+      .filter(Boolean) as MasterTaskEquipment[];
+
+    addToMaster({
+      name: task.name,
+      unit: task.unit,
+      category: task.category ?? '',
+      dailyYield: task.dailyYield,
+      code: task.code ?? '',
+      description: task.description ?? '',
+      fixedCost: task.fixedCost ?? 0,
+      fixedCostDescription: task.fixedCostDescription ?? '',
+      specifications: task.specifications ?? '',
+      tags: [],
+      materials,
+      labor,
+      equipment,
+    });
+
+    setSavedToMasterIds(prev => new Set(prev).add(task.id));
+    setTimeout(() => {
+      setSavedToMasterIds(prev => { const n = new Set(prev); n.delete(task.id); return n; });
+    }, 3000);
+  };
+
   // --- MASTER APU EDITOR STATE ---
   const [apuEditorTaskId, setApuEditorTaskId] = useState<string | null>(null);
   const [editingQuantityId, setEditingQuantityId] = useState<string | null>(null);
 
   // --- PRINT PREVIEW STATE ---
   const [showPrintPreview, setShowPrintPreview] = useState(false);
+  const [showComparison, setShowComparison] = useState(false);
+  const [tableViewMode, setTableViewMode] = useState<'tecnico' | 'comercial'>('tecnico');
   const [printOptions, setPrintOptions] = useState({
       showUnitPrice: true,
       showQuantity: true,
@@ -64,9 +256,36 @@ export const BudgetEditor: React.FC = () => {
       orientation: 'portrait', // 'portrait', 'landscape'
       showIcon: false,
       customText: '',
-      showIncidence: false
+      showIncidence: false,
+      printMode: 'legacy' as 'legacy' | 'cliente' | 'tecnico' | 'interno' | 'resumido',
   });
   const [printLogo, setPrintLogo] = useState<string | null>(null);
+  const budgetPrintRef = useRef<HTMLDivElement | null>(null);
+
+  const BUDGET_PRINT_STYLES = `
+    /* BudgetEditor-specific overrides */
+    .space-y-1 > * + * { margin-top: 0.25rem; }
+    .justify-end { justify-content: flex-end; }
+    .items-end   { align-items: flex-end; }
+  `;
+
+  const handlePrintBudget = () => {
+    const el = budgetPrintRef.current;
+    if (!el) return;
+    printDocument({
+      title: `${
+        printOptions.printMode === 'cliente' ? 'Presupuesto' :
+        printOptions.printMode === 'tecnico' ? 'Presupuesto Técnico' :
+        printOptions.printMode === 'interno' ? 'Análisis Interno' :
+        'Presupuesto'
+      } - ${project.name}`,
+      html: el.innerHTML,
+      styles: BUDGET_PRINT_STYLES,
+      pageSize: printOptions.paperSize,
+      pageOrientation: printOptions.orientation as 'portrait' | 'landscape',
+      pageMargin: '10mm',
+    });
+  };
 
   // --- CALCULATIONS & DATA PREP ---
   const budgetData = useMemo(() => {
@@ -81,9 +300,20 @@ export const BudgetEditor: React.FC = () => {
     grouped['Otros'] = [];
     categoryTotals['Otros'] = { mat: 0, lab: 0, total: 0 };
 
+    let discardedCount = 0;
     project.items.forEach(item => {
       const task = tasks.find(t => t.id === item.taskId);
-      if (!task) return;
+      if (!task) {
+        discardedCount++;
+        console.warn('[BudgetEditor] budget_item descartado: task no encontrada en allTasks', {
+          itemId: item.id,
+          taskId: item.taskId,
+          projectId: item.projectId,
+          totalTasks: tasks.length,
+          hint: 'Si totalTasks=0, las tasks no cargaron. Si totalTasks>0, hay mismatch de IDs o organizationId.',
+        });
+        return;
+      }
 
       const category = task.category && selectedRubros.has(task.category) ? task.category : 'Otros';
       
@@ -116,6 +346,13 @@ export const BudgetEditor: React.FC = () => {
       }
     });
 
+    if (discardedCount > 0) {
+      console.error(
+        `[BudgetEditor] ⚠ ${discardedCount}/${project.items.length} budget_items DESCARTADOS por task no encontrada.`,
+        `Tasks disponibles: ${tasks.length}. Causa probable: INSERT de task falló o task.organizationId ≠ orgId.`,
+      );
+    }
+
     return { grouped, categoryTotals };
   }, [project.items, tasks, selectedRubros, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap]);
 
@@ -133,6 +370,55 @@ export const BudgetEditor: React.FC = () => {
       return { mat, lab, subtotal, adjustmentAmount, finalTotal };
   }, [budgetData, globalAdjustment]);
 
+  // ── Valorización comercial por ítem (Cuadro Empresario distribuido) ──────────
+  //
+  // Lee businessConfig del mismo store Zustand que BudgetBusinessPanel.
+  // No re-inicializa la config: BudgetBusinessPanel ya lo hace a través de su
+  // prop businessConfigFromDB / legacyPricing. Aquí solo leemos.
+  //
+  // Dependencia directa sobre grandTotals.subtotal para que al cambiar
+  // las cantidades de los ítems los breakdowns se actualicen de inmediato.
+  const kConfigSelector = useMemo(() => selectBusinessConfig(project.id), [project.id]);
+  const budgetBusinessConfig = useBudgetKStore(kConfigSelector);
+
+  const budgetKSummary = useMemo(
+    () => computeBudgetKSummary(grandTotals.subtotal, budgetBusinessConfig),
+    [grandTotals.subtotal, budgetBusinessConfig],
+  );
+
+  /**
+   * Map keyed by BudgetItem.id → BudgetItemSaleBreakdown.
+   * Lookup O(1) en render: breakdownByItemId[row.item.id]?.salePriceUnit
+   *
+   * Para totales del presupuesto usar budgetKSummary.finalSalePrice
+   * (fuente de verdad), NO la suma de salePriceTotal de los ítems
+   * (puede diferir por punto flotante).
+   */
+  const breakdownByItemId = useMemo((): Record<string, BudgetItemSaleBreakdown> => {
+    const inputs: ItemDirectCostInput[] = [];
+
+    // Recorre TODOS los rubros, incluyendo 'Otros'
+    Object.values(budgetData.grouped).forEach((rows: any[]) => {
+      rows.forEach(row => {
+        inputs.push({
+          id:              row.item.id as string,
+          quantity:        row.item.quantity as number,
+          directCostUnit:  (row.unitMatEq + row.unitLab) as number,
+          directCostTotal: row.totalItem as number,
+        });
+      });
+    });
+
+    const breakdowns = computeBudgetItemSaleBreakdown(inputs, budgetKSummary);
+    return Object.fromEntries(breakdowns.map(b => [b.id, b]));
+  }, [budgetData.grouped, budgetKSummary]);
+
+  // Auto-expandir 'Otros' cuando tiene ítems (no está en la lista inicial de rubros)
+  useEffect(() => {
+    if (budgetData.grouped['Otros']?.length > 0) {
+      setExpandedRubros(prev => new Set([...prev, 'Otros']));
+    }
+  }, [budgetData.grouped]);
 
   // --- HANDLERS ---
 
@@ -178,22 +464,57 @@ export const BudgetEditor: React.FC = () => {
       });
   };
 
-  const handleSavePanel = () => {
+  const handleSavePanel = async () => {
       if (!configPanel.selectedTaskId) return;
 
       if (configPanel.mode === 'add') {
-          addBudgetItem({
-              id: crypto.randomUUID(),
-              taskId: configPanel.selectedTaskId,
-              quantity: configPanel.quantity
-          });
+          // Si hay una tarea nueva pendiente, esperarla y abortar si falló (evita FK violation).
+          if (pendingTaskRef.current) {
+              let taskOk = true;
+              try {
+                  await pendingTaskRef.current;
+              } catch {
+                  taskOk = false;
+                  console.error('[handleSavePanel] addTask falló — budget_item cancelado');
+              } finally {
+                  pendingTaskRef.current = null;
+              }
+              if (!taskOk) {
+                  setSaveStatus('error');
+                  setTimeout(() => setSaveStatus('idle'), 2500);
+                  return;
+              }
+          }
+
+          setSaveStatus('saving');
+          try {
+              await addBudgetItem({
+                  id: generateId(),
+                  taskId: configPanel.selectedTaskId,
+                  quantity: configPanel.quantity,
+                  progress: 0,
+              });
+              setSaveStatus('ok');
+              setTimeout(() => {
+                  setSaveStatus('idle');
+                  setConfigPanel(prev => ({ ...prev, isOpen: false }));
+              }, 900);
+          } catch {
+              setSaveStatus('error');
+              setTimeout(() => setSaveStatus('idle'), 2500);
+          }
       } else if (configPanel.mode === 'edit' && configPanel.itemId) {
+          setSaveStatus('saving');
           updateBudgetItem(configPanel.itemId, {
               taskId: configPanel.selectedTaskId,
-              quantity: configPanel.quantity
+              quantity: configPanel.quantity,
           });
+          setSaveStatus('ok');
+          setTimeout(() => {
+              setSaveStatus('idle');
+              setConfigPanel(prev => ({ ...prev, isOpen: false }));
+          }, 900);
       }
-      setConfigPanel({ ...configPanel, isOpen: false });
   };
 
   const handleSelectPreset = (preset: Partial<Task>) => {
@@ -201,9 +522,12 @@ export const BudgetEditor: React.FC = () => {
       const existing = tasks.find(t => t.name === preset.name && t.category === configPanel.category);
       if (existing) {
           setConfigPanel(prev => ({ ...prev, selectedTaskId: existing.id }));
+          pendingTaskRef.current = null;
       } else {
-          // Create new task
-          const newId = `task_${crypto.randomUUID().substring(0,8)}`;
+          // Create new task — actualizamos el panel de inmediato (UX) y guardamos la
+          // Promise en un ref para que handleSavePanel pueda awaitar antes de insertar
+          // el budget_item, evitando la violación de FK si el INSERT de tarea no terminó.
+          const newId = generateId();
           const newTask: Task = {
               id: newId,
               organizationId: project.organizationId,
@@ -215,7 +539,7 @@ export const BudgetEditor: React.FC = () => {
               description: preset.description || '',
               // ... defaults
           };
-          addTask(newTask);
+          pendingTaskRef.current = addTask(newTask);
           setConfigPanel(prev => ({ ...prev, selectedTaskId: newId }));
       }
   };
@@ -235,6 +559,206 @@ export const BudgetEditor: React.FC = () => {
   const handleDeletePreset = (name: string) => {
       removeRubroPreset(configPanel.category, name);
   };
+
+  // ── Wizard de inicio ────────────────────────────────────────────────────────
+  // Bloquear el render hasta que AMBAS cargas terminen:
+  //  • budgetItemsLoading: budget_items del proyecto cargados desde Supabase
+  //  • tasksLoaded: tareas de la org cargadas (necesarias para resolver task → ítem)
+  //
+  // Sin este guard, el wizard aparecería mientras project.items === [] (gap de carga),
+  // O el editor mostraría la tabla vacía porque tasks aún no llegaron.
+  if (budgetItemsLoading || !tasksLoaded) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-sm text-slate-400 animate-pulse">Cargando presupuesto...</p>
+      </div>
+    );
+  }
+
+  if (project.items.length === 0 && !wizardDismissed) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-8 bg-slate-50/50">
+        <div className="max-w-md w-full">
+
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 rounded-2xl bg-blue-100 flex items-center justify-center mx-auto mb-4">
+              <Sparkles size={28} className="text-blue-600" />
+            </div>
+            <h2 className="text-xl font-bold text-slate-800">¿Cómo querés empezar?</h2>
+            <p className="text-sm text-slate-500 mt-1.5">
+              Este presupuesto está vacío. Elegí una opción para comenzar.
+            </p>
+          </div>
+
+          {/* Picker de rubro */}
+          {wizardRubroOpen ? (
+            <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+              <p className="text-sm font-bold text-slate-800">Seleccioná el rubro a importar</p>
+              <select
+                value={wizardSelectedRubro}
+                onChange={e => setWizardSelectedRubro(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {rubros.length === 0 && <option value="">Sin rubros disponibles</option>}
+                {rubros.map(r => (
+                  <option key={r} value={r}>
+                    {r} ({masterTasks.filter(t => t.category === r).length} tareas)
+                  </option>
+                ))}
+              </select>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setWizardRubroOpen(false)}
+                  className="px-4 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                >
+                  Volver
+                </button>
+                <button
+                  onClick={handleWizardRubroImport}
+                  disabled={!wizardSelectedRubro || rubros.length === 0}
+                  className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Importar rubro
+                </button>
+              </div>
+            </div>
+
+          ) : wizardTemplateOpen ? (
+            /* Picker de plantilla */
+            <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+              <p className="text-sm font-bold text-slate-800">Seleccioná una plantilla</p>
+              <select
+                value={wizardSelectedTemplateId}
+                onChange={e => { setWizardSelectedTemplateId(e.target.value); setWizardTemplateMsg(''); }}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+              >
+                {budgetTemplates.map(t => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}{t.category ? ` — ${t.category}` : ''} ({t.items.length} ítem{t.items.length !== 1 ? 's' : ''})
+                  </option>
+                ))}
+              </select>
+              {wizardTemplateMsg && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  {wizardTemplateMsg}
+                </p>
+              )}
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => { setWizardTemplateOpen(false); setWizardTemplateMsg(''); }}
+                  className="px-4 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                >
+                  Volver
+                </button>
+                {wizardTemplateMsg ? (
+                  <button
+                    onClick={() => setWizardDismissed(true)}
+                    className="px-4 py-2 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
+                  >
+                    Ver presupuesto
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleWizardTemplateImport}
+                    disabled={!wizardSelectedTemplateId}
+                    className="px-4 py-2 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    Aplicar plantilla
+                  </button>
+                )}
+              </div>
+            </div>
+
+          ) : (
+            <div className="space-y-3">
+
+              {/* Opción 0 — continuar con trabajo previo */}
+              <button
+                onClick={() => setWizardDismissed(true)}
+                className="w-full flex items-start gap-4 p-4 bg-slate-900 border border-slate-700 rounded-xl hover:bg-slate-800 transition-all text-left group"
+              >
+                <div className="w-9 h-9 rounded-lg bg-slate-700 flex items-center justify-center flex-shrink-0">
+                  <ArrowRight size={18} className="text-white" />
+                </div>
+                <div>
+                  <p className="font-bold text-sm text-white">Continuar con el presupuesto →</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Ya trabajé en este presupuesto. Ir directamente al editor.</p>
+                </div>
+              </button>
+
+              {/* Opción 1 — vacío */}
+              <button
+                onClick={() => setWizardDismissed(true)}
+                className="w-full flex items-start gap-4 p-4 bg-white border border-slate-200 rounded-xl hover:border-blue-300 hover:shadow-sm transition-all text-left group"
+              >
+                <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-100 transition-colors">
+                  <Plus size={18} className="text-slate-500 group-hover:text-blue-600 transition-colors" />
+                </div>
+                <div>
+                  <p className="font-bold text-sm text-slate-800">Crear presupuesto vacío</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Empezá desde cero, agregando tareas manualmente.</p>
+                </div>
+              </button>
+
+              {/* Opción 2 — rubros desde Base Maestra */}
+              <button
+                onClick={() => { setWizardSelectedRubro(rubros[0] ?? ''); setWizardRubroOpen(true); }}
+                disabled={masterTasks.length === 0 || rubros.length === 0}
+                className="w-full flex items-start gap-4 p-4 bg-white border border-slate-200 rounded-xl hover:border-indigo-300 hover:shadow-sm transition-all text-left group disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-100 transition-colors">
+                  <Package size={18} className="text-slate-500 group-hover:text-indigo-600 transition-colors" />
+                </div>
+                <div>
+                  <p className="font-bold text-sm text-slate-800">Copiar rubros desde Base Maestra</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {masterTasks.length === 0 ? 'No hay tareas maestras en tu organización.' : 'Importá las tareas APU de tu organización, agrupadas por rubro.'}
+                  </p>
+                </div>
+              </button>
+
+              {/* Opción 3 — biblioteca completa */}
+              <button
+                onClick={handleWizardLibraryImport}
+                disabled={masterTasks.length === 0}
+                className="w-full flex items-start gap-4 p-4 bg-white border border-slate-200 rounded-xl hover:border-emerald-300 hover:shadow-sm transition-all text-left group disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-100 transition-colors">
+                  <DollarSign size={18} className="text-slate-500 group-hover:text-emerald-600 transition-colors" />
+                </div>
+                <div>
+                  <p className="font-bold text-sm text-slate-800">Copiar biblioteca completa</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {masterTasks.length === 0 ? 'No hay tareas maestras en tu organización.' : `Importar las ${masterTasks.length} tarea${masterTasks.length !== 1 ? 's' : ''} disponibles de una vez.`}
+                  </p>
+                </div>
+              </button>
+
+              {/* Opción 4 — desde plantilla */}
+              <button
+                onClick={() => { setWizardSelectedTemplateId(budgetTemplates[0]?.id ?? ''); setWizardTemplateMsg(''); setWizardTemplateOpen(true); }}
+                disabled={budgetTemplates.length === 0}
+                className="w-full flex items-start gap-4 p-4 bg-white border border-slate-200 rounded-xl hover:border-violet-300 hover:shadow-sm transition-all text-left group disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center flex-shrink-0 group-hover:bg-violet-100 transition-colors">
+                  <LayoutGrid size={18} className="text-slate-500 group-hover:text-violet-600 transition-colors" />
+                </div>
+                <div>
+                  <p className="font-bold text-sm text-slate-800">Crear desde plantilla</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {budgetTemplates.length === 0
+                      ? 'No hay plantillas en tu organización. Creá una en la pestaña Plantillas de Administración.'
+                      : `${budgetTemplates.length} plantilla${budgetTemplates.length !== 1 ? 's' : ''} disponible${budgetTemplates.length !== 1 ? 's' : ''}.`}
+                  </p>
+                </div>
+              </button>
+
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // Render logic
   return (
@@ -296,18 +820,45 @@ export const BudgetEditor: React.FC = () => {
                       </div>
                   </div>
                   <div className="flex items-center gap-2">
+                      <div className="flex items-center rounded-lg overflow-hidden border border-slate-200 text-xs font-bold">
+                          <button
+                              onClick={() => setTableViewMode('tecnico')}
+                              className={`px-3 py-2 transition-colors ${tableViewMode === 'tecnico' ? 'bg-slate-800 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}
+                          >
+                              Costo Directo
+                          </button>
+                          <button
+                              onClick={() => setTableViewMode('comercial')}
+                              className={`px-3 py-2 transition-colors ${tableViewMode === 'comercial' ? 'bg-emerald-700 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}
+                          >
+                              Precio Venta
+                          </button>
+                      </div>
+                      <button
+                          onClick={() => setShowComparison(v => !v)}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors ${showComparison ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+                      >
+                          <DollarSign size={16} /> Comparar costos
+                      </button>
                       <button onClick={() => setShowPrintPreview(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors">
                           <Printer size={16} /> Imprimir
-                      </button>
-                      <button className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200">
-                          <Save size={16} /> Guardar Cambios
                       </button>
                   </div>
               </div>
           </div>
 
+          {/* COMPARISON PANEL */}
+          {showComparison && (
+              <div className="flex-1 overflow-auto bg-slate-50/50 p-6">
+                  <BudgetCostComparisonPanel
+                      projectId={project.id}
+                      organizationId={project.organizationId}
+                  />
+              </div>
+          )}
+
           {/* TABLE CONTENT */}
-          <div className="flex-1 overflow-auto bg-slate-50/50 p-6">
+          {!showComparison && <div className="flex-1 overflow-auto bg-slate-50/50 p-6">
               <div className="bg-white border border-slate-200 shadow-sm rounded-lg overflow-hidden">
                   <table className="w-full text-left border-collapse">
                       <thead>
@@ -315,19 +866,30 @@ export const BudgetEditor: React.FC = () => {
                               <th className="p-3 w-1/3">Descripción del Ítem</th>
                               <th className="p-3 w-16 text-center">Unidad</th>
                               <th className="p-3 w-24 text-center">Cantidad</th>
-                              
-                              <th className="p-3 w-28 text-right bg-blue-50/50 border-l border-slate-200">Material<br/>x Unidad</th>
-                              <th className="p-3 w-28 text-right bg-blue-50/50">Material<br/>Subtotal</th>
-                              
-                              <th className="p-3 w-28 text-right bg-orange-50/50 border-l border-slate-200">M.Obra<br/>x Unidad</th>
-                              <th className="p-3 w-28 text-right bg-orange-50/50">M.Obra<br/>Subtotal</th>
-                              
-                              <th className="p-3 w-32 text-right bg-slate-200/50 border-l border-slate-200">Subtotal</th>
+                              {tableViewMode === 'tecnico' ? (
+                                  <>
+                                      <th className="p-3 w-28 text-right bg-blue-50/50 border-l border-slate-200">Material<br/>x Unidad</th>
+                                      <th className="p-3 w-28 text-right bg-blue-50/50">Material<br/>Subtotal</th>
+                                      <th className="p-3 w-28 text-right bg-orange-50/50 border-l border-slate-200">M.Obra<br/>x Unidad</th>
+                                      <th className="p-3 w-28 text-right bg-orange-50/50">M.Obra<br/>Subtotal</th>
+                                      <th className="p-3 w-32 text-right bg-slate-200/50 border-l border-slate-200">Subtotal CD</th>
+                                  </>
+                              ) : (
+                                  <>
+                                      <th className="p-3 w-32 text-right bg-emerald-50 border-l border-slate-200">PV<br/>Unit.</th>
+                                      <th className="p-3 w-36 text-right bg-emerald-100/60">PV<br/>Total</th>
+                                  </>
+                              )}
                               <th className="p-3 w-20 text-center"></th>
                           </tr>
                       </thead>
                       <tbody>
-                          {Array.from(selectedRubros).map((rubro: string) => {
+                          {[
+                              ...Array.from(selectedRubros),
+                              // 'Otros' no está en selectedRubros pero puede tener items
+                              // cuya task.category no matchea ningún rubro activo.
+                              ...(budgetData.grouped['Otros']?.length > 0 ? ['Otros'] : []),
+                          ].map((rubro: string) => {
                               const items = budgetData.grouped[rubro] || [];
                               const isExpanded = expandedRubros.has(rubro);
                               const totals = budgetData.categoryTotals[rubro];
@@ -340,10 +902,21 @@ export const BudgetEditor: React.FC = () => {
                                               {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                                               {rubro}
                                           </td>
-                                          <td colSpan={6}></td>
-                                          <td className="p-2 text-right font-mono font-bold text-sm">
-                                              ${totals.total.toLocaleString(undefined, {minimumFractionDigits: 2})}
-                                          </td>
+                                          {tableViewMode === 'tecnico' ? (
+                                              <>
+                                                  <td colSpan={6}></td>
+                                                  <td className="p-2 text-right font-mono font-bold text-sm">
+                                                      ${totals.total.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                                  </td>
+                                              </>
+                                          ) : (
+                                              <>
+                                                  <td colSpan={3}></td>
+                                                  <td className="p-2 text-right font-mono font-bold text-sm text-emerald-300">
+                                                      ${items.reduce((s, r) => s + (breakdownByItemId[r.item.id]?.salePriceTotal ?? 0), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                                  </td>
+                                              </>
+                                          )}
                                           <td></td>
                                       </tr>
 
@@ -352,7 +925,7 @@ export const BudgetEditor: React.FC = () => {
                                           <>
                                               {items.length === 0 ? (
                                                   <tr>
-                                                      <td colSpan={9} className="p-4 text-center bg-slate-50 border-b border-slate-200">
+                                                      <td colSpan={tableViewMode === 'tecnico' ? 9 : 6} className="p-4 text-center bg-slate-50 border-b border-slate-200">
                                                           <div className="flex flex-col items-center justify-center text-slate-400 gap-2">
                                                               <span className="text-xs italic">No hay ítems en esta etapa.</span>
                                                               <button onClick={() => handleQuickAddTask(rubro)} className="text-blue-600 font-bold text-xs hover:underline flex items-center gap-1">
@@ -395,26 +968,39 @@ export const BudgetEditor: React.FC = () => {
                                                                 )}
                                                             </td>
 
-                                                            {/* Material Columns */}
-                                                            <td className="p-2 text-right text-xs text-slate-500 border-l border-slate-100 font-mono">
-                                                                ${row.unitMatEq.toFixed(2)}
-                                                            </td>
-                                                            <td className="p-2 text-right text-xs font-bold text-slate-600 bg-blue-50/20 font-mono">
-                                                                ${row.totalMatEq.toLocaleString(undefined, {minimumFractionDigits: 2})}
-                                                            </td>
-
-                                                            {/* Labor Columns */}
-                                                            <td className="p-2 text-right text-xs text-slate-500 border-l border-slate-100 font-mono">
-                                                                ${row.unitLab.toFixed(2)}
-                                                            </td>
-                                                            <td className="p-2 text-right text-xs font-bold text-slate-600 bg-orange-50/20 font-mono">
-                                                                ${row.totalLab.toLocaleString(undefined, {minimumFractionDigits: 2})}
-                                                            </td>
-
-                                                            {/* Total & Action */}
-                                                            <td className="p-2 text-right text-xs font-bold text-slate-800 bg-slate-100/50 border-l border-slate-200 font-mono">
-                                                                ${row.totalItem.toLocaleString(undefined, {minimumFractionDigits: 2})}
-                                                            </td>
+                                                            {/* Material / Labor / PV Columns */}
+                                                            {tableViewMode === 'tecnico' ? (
+                                                                <>
+                                                                    <td className="p-2 text-right text-xs text-slate-500 border-l border-slate-100 font-mono">
+                                                                        ${row.unitMatEq.toFixed(2)}
+                                                                    </td>
+                                                                    <td className="p-2 text-right text-xs font-bold text-slate-600 bg-blue-50/20 font-mono">
+                                                                        ${row.totalMatEq.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                                                    </td>
+                                                                    <td className="p-2 text-right text-xs text-slate-500 border-l border-slate-100 font-mono">
+                                                                        ${row.unitLab.toFixed(2)}
+                                                                    </td>
+                                                                    <td className="p-2 text-right text-xs font-bold text-slate-600 bg-orange-50/20 font-mono">
+                                                                        ${row.totalLab.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                                                    </td>
+                                                                    <td className="p-2 text-right text-xs font-bold text-slate-800 bg-slate-100/50 border-l border-slate-200 font-mono">
+                                                                        ${row.totalItem.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                                                    </td>
+                                                                </>
+                                                            ) : (() => {
+                                                                const bd = breakdownByItemId[row.item.id];
+                                                                const fmt = (n: number) => n.toLocaleString(undefined, {minimumFractionDigits: 2});
+                                                                return (
+                                                                    <>
+                                                                        <td className="p-2 text-right text-xs text-slate-600 border-l border-slate-100 font-mono bg-emerald-50/30">
+                                                                            ${fmt(bd?.salePriceUnit ?? 0)}
+                                                                        </td>
+                                                                        <td className="p-2 text-right text-xs font-bold text-emerald-800 bg-emerald-50/50 font-mono">
+                                                                            ${fmt(bd?.salePriceTotal ?? 0)}
+                                                                        </td>
+                                                                    </>
+                                                                );
+                                                            })()}
                                                             <td className="p-2 text-center">
                                                                 <div className="flex justify-center gap-1">
                                                                     <button
@@ -424,7 +1010,7 @@ export const BudgetEditor: React.FC = () => {
                                                                     >
                                                                         <Settings size={14} />
                                                                     </button>
-                                                                    <button 
+                                                                    <button
                                                                         onClick={() => setApuEditorTaskId(row.task.id)}
                                                                         className="p-1 text-purple-400 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors"
                                                                         title="Editar APU Maestro"
@@ -463,7 +1049,7 @@ export const BudgetEditor: React.FC = () => {
                       </tbody>
                   </table>
               </div>
-          </div>
+          </div>}
 
           {/* FOOTER TOTALS */}
           <div className="bg-slate-900 text-white p-6 border-t-4 border-blue-600 shadow-2xl z-10">
@@ -492,6 +1078,17 @@ export const BudgetEditor: React.FC = () => {
               </div>
           </div>
 
+          {/* CUADRO EMPRESARIO / COEFICIENTE K */}
+          <BudgetBusinessPanel
+            projectId={project.id}
+            directCost={grandTotals.subtotal}
+            businessConfigFromDB={project.businessConfig}
+            legacyPricing={project.pricing}
+            isOpen={showKPanel}
+            onToggle={() => setShowKPanel(prev => !prev)}
+            onSave={handleSaveBusinessConfig}
+          />
+
           {/* CONFIGURATION SIDE PANEL (OVERLAY) */}
           {configPanel.isOpen && (
               <div className="absolute inset-0 z-50 flex justify-end">
@@ -517,7 +1114,7 @@ export const BudgetEditor: React.FC = () => {
                           {/* Task Selector */}
                           <div className="space-y-2">
                               <label className="text-xs font-bold text-slate-500 uppercase">Tarea de Base de Datos</label>
-                              <select 
+                              <select
                                   className="w-full p-3 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 bg-white shadow-sm outline-none"
                                   value={configPanel.selectedTaskId}
                                   onChange={(e) => setConfigPanel({ ...configPanel, selectedTaskId: e.target.value })}
@@ -529,6 +1126,14 @@ export const BudgetEditor: React.FC = () => {
                                       <option key={t.id} value={t.id}>{t.name} ({t.unit})</option>
                                   ))}
                               </select>
+                              {/* Aviso explícito cuando no hay tareas APU para el rubro */}
+                              {tasks.filter(t => t.category === configPanel.category).length === 0 && (
+                                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 leading-snug">
+                                  No hay tareas APU para <strong>{configPanel.category}</strong>.
+                                  Importá desde la <strong>Base Maestra</strong> (panel lateral) o
+                                  seleccioná una tarea típica de la lista de abajo.
+                                </p>
+                              )}
                           </div>
 
                           {/* Presets Section */}
@@ -600,7 +1205,7 @@ export const BudgetEditor: React.FC = () => {
                                       type="number" 
                                       className="flex-1 p-3 border border-slate-300 rounded-lg text-lg font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
                                       value={configPanel.quantity}
-                                      onChange={(e) => setConfigPanel({ ...configPanel, quantity: parseFloat(e.target.value) })}
+                                      onChange={(e) => setConfigPanel({ ...configPanel, quantity: parseFloat(e.target.value) || 0 })}
                                       min="0"
                                   />
                                   <div className="w-16 h-12 flex items-center justify-center bg-slate-100 rounded-lg text-sm font-bold text-slate-500 border border-slate-200">
@@ -618,12 +1223,20 @@ export const BudgetEditor: React.FC = () => {
                           >
                               Cancelar
                           </button>
-                          <button 
+                          <button
                               onClick={handleSavePanel}
-                              disabled={!configPanel.selectedTaskId || configPanel.quantity <= 0}
-                              className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                              disabled={!configPanel.selectedTaskId || configPanel.quantity <= 0 || saveStatus === 'saving' || saveStatus === 'ok'}
+                              className={`flex-1 py-3 rounded-xl font-bold transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed ${
+                                  saveStatus === 'ok'     ? 'bg-green-500 text-white' :
+                                  saveStatus === 'error'  ? 'bg-red-500 text-white' :
+                                  saveStatus === 'saving' ? 'bg-blue-400 text-white' :
+                                  'bg-blue-600 text-white hover:bg-blue-700'
+                              }`}
                           >
-                              {configPanel.mode === 'add' ? 'Agregar Ítem' : 'Guardar Cambios'}
+                              {saveStatus === 'ok'     ? 'Guardado ✓' :
+                               saveStatus === 'error'  ? 'Error al guardar' :
+                               saveStatus === 'saving' ? 'Guardando...' :
+                               configPanel.mode === 'add' ? 'Agregar Ítem' : 'Guardar Cambios'}
                           </button>
                       </div>
                   </div>
@@ -642,22 +1255,6 @@ export const BudgetEditor: React.FC = () => {
           {/* PRINT PREVIEW MODAL */}
           {showPrintPreview && (
               <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 print:p-0 print:bg-white print:static">
-                  {/* Dynamic Print Styles */}
-                  <style>
-                    {`
-                        @media print {
-                            @page {
-                                size: ${printOptions.paperSize} ${printOptions.orientation};
-                                margin: 10mm;
-                            }
-                            body {
-                                -webkit-print-color-adjust: exact;
-                                print-color-adjust: exact;
-                            }
-                        }
-                    `}
-                  </style>
-
                   <div className="bg-white w-full max-w-6xl h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col print:h-auto print:w-full print:max-w-none print:shadow-none print:rounded-none">
                       
                       {/* HEADER (Hidden on Print) */}
@@ -669,7 +1266,7 @@ export const BudgetEditor: React.FC = () => {
                               <p className="text-xs text-slate-500">Configure qué columnas desea incluir en el reporte.</p>
                           </div>
                           <div className="flex items-center gap-3">
-                              <button onClick={() => window.print()} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 flex items-center gap-2 shadow-lg shadow-blue-200">
+                              <button onClick={handlePrintBudget} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 flex items-center gap-2 shadow-lg shadow-blue-200">
                                   <Printer size={16} /> Imprimir Ahora
                               </button>
                               <button onClick={() => setShowPrintPreview(false)} className="p-2 hover:bg-slate-200 rounded-full text-slate-400">
@@ -682,6 +1279,40 @@ export const BudgetEditor: React.FC = () => {
                           {/* SIDEBAR CONFIG (Hidden on Print) */}
                           <div className="w-80 bg-slate-50 border-r border-slate-200 p-4 overflow-y-auto print:hidden flex flex-col gap-6">
                               
+                              {/* Print Mode Selector */}
+                              <div>
+                                  <h4 className="font-bold text-xs text-slate-500 uppercase mb-3 flex items-center gap-2">
+                                      <BookOpen size={12} /> Modo de Impresión
+                                  </h4>
+                                  <div className="grid grid-cols-2 gap-2">
+                                      {([
+                                          { value: 'cliente',  label: 'Cliente',   desc: 'Precio de venta' },
+                                          { value: 'tecnico',  label: 'Técnico',   desc: 'CD + precio venta' },
+                                          { value: 'interno',  label: 'Interno',   desc: 'Desglose completo' },
+                                          { value: 'legacy',   label: 'Clásico',   desc: 'Columnas manuales' },
+                                          { value: 'resumido', label: 'Resumido',  desc: 'Solo rubros/capítulos' },
+                                      ] as const).map(m => (
+                                          <button
+                                              key={m.value}
+                                              onClick={() => setPrintOptions({ ...printOptions, printMode: m.value })}
+                                              className={`p-2 rounded border text-left transition-colors ${m.value === 'resumido' ? 'col-span-2' : ''} ${
+                                                  printOptions.printMode === m.value
+                                                      ? 'bg-blue-50 border-blue-400 text-blue-800'
+                                                      : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                                              }`}
+                                          >
+                                              <div className="text-xs font-bold">{m.label}</div>
+                                              <div className="text-[10px] text-slate-500">{m.desc}</div>
+                                          </button>
+                                      ))}
+                                  </div>
+                                  {printOptions.printMode === 'interno' && (
+                                      <p className="mt-2 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                                          Modo Interno tiene 10 columnas. Se recomienda orientación <strong>Horizontal</strong>.
+                                      </p>
+                                  )}
+                              </div>
+
                               {/* Page Settings */}
                               <div>
                                   <h4 className="font-bold text-xs text-slate-500 uppercase mb-3 flex items-center gap-2">
@@ -726,31 +1357,37 @@ export const BudgetEditor: React.FC = () => {
                                       <CheckSquare size={12} /> Contenido del Reporte
                                   </h4>
                                   <div className="space-y-2">
-                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
-                                          <input type="checkbox" checked={printOptions.showQuantity} onChange={e => setPrintOptions({...printOptions, showQuantity: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                          Mostrar Cantidad
-                                      </label>
-                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
-                                          <input type="checkbox" checked={printOptions.showUnitPrice} onChange={e => setPrintOptions({...printOptions, showUnitPrice: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                          Mostrar Precios Unitarios
-                                      </label>
-                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
-                                          <input type="checkbox" checked={printOptions.showMatSubtotal} onChange={e => setPrintOptions({...printOptions, showMatSubtotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                          Mostrar Subtotal Materiales
-                                      </label>
-                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
-                                          <input type="checkbox" checked={printOptions.showLabSubtotal} onChange={e => setPrintOptions({...printOptions, showLabSubtotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                          Mostrar Subtotal Mano de Obra
-                                      </label>
-                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
-                                          <input type="checkbox" checked={printOptions.showTotal} onChange={e => setPrintOptions({...printOptions, showTotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                          Mostrar Total Ítem
-                                      </label>
-                                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded bg-blue-50 border border-blue-100">
-                                          <input type="checkbox" checked={printOptions.showIncidence} onChange={e => setPrintOptions({...printOptions, showIncidence: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
-                                          Mostrar Incidencia %
-                                      </label>
-                                      <div className="h-px bg-slate-200 my-2"></div>
+                                      {/* Column toggles — legacy mode only */}
+                                      {printOptions.printMode === 'legacy' && (
+                                          <>
+                                              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                                  <input type="checkbox" checked={printOptions.showQuantity} onChange={e => setPrintOptions({...printOptions, showQuantity: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                                  Mostrar Cantidad
+                                              </label>
+                                              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                                  <input type="checkbox" checked={printOptions.showUnitPrice} onChange={e => setPrintOptions({...printOptions, showUnitPrice: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                                  Mostrar Precios Unitarios
+                                              </label>
+                                              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                                  <input type="checkbox" checked={printOptions.showMatSubtotal} onChange={e => setPrintOptions({...printOptions, showMatSubtotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                                  Mostrar Subtotal Materiales
+                                              </label>
+                                              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                                  <input type="checkbox" checked={printOptions.showLabSubtotal} onChange={e => setPrintOptions({...printOptions, showLabSubtotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                                  Mostrar Subtotal Mano de Obra
+                                              </label>
+                                              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
+                                                  <input type="checkbox" checked={printOptions.showTotal} onChange={e => setPrintOptions({...printOptions, showTotal: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                                  Mostrar Total Ítem
+                                              </label>
+                                              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded bg-blue-50 border border-blue-100">
+                                                  <input type="checkbox" checked={printOptions.showIncidence} onChange={e => setPrintOptions({...printOptions, showIncidence: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
+                                                  Mostrar Incidencia %
+                                              </label>
+                                              <div className="h-px bg-slate-200 my-2"></div>
+                                          </>
+                                      )}
+                                      {/* Shared options for all modes */}
                                       <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-100 p-1 rounded">
                                           <input type="checkbox" checked={printOptions.showCategoryHeaders} onChange={e => setPrintOptions({...printOptions, showCategoryHeaders: e.target.checked})} className="rounded text-blue-600 focus:ring-blue-500"/>
                                           Agrupar por Rubros
@@ -811,7 +1448,8 @@ export const BudgetEditor: React.FC = () => {
 
                           {/* PREVIEW CONTENT */}
                           <div className="flex-1 overflow-auto bg-slate-100 p-8 print:p-0 print:overflow-visible print:bg-white flex justify-center">
-                              <div 
+                              <div
+                                ref={budgetPrintRef}
                                 className={`bg-white shadow-lg border border-slate-200 p-8 print:shadow-none print:border-none print:p-0 transition-all duration-300 origin-top`}
                                 style={{
                                     width: printOptions.paperSize === 'a4' 
@@ -832,7 +1470,17 @@ export const BudgetEditor: React.FC = () => {
                                       <div className="flex justify-between items-start mb-4">
                                           <div>
                                               <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tight leading-none mb-1">{project.name}</h1>
-                                              <p className="text-sm text-slate-600 font-bold">Cómputo y Presupuesto de Obra</p>
+                                              <p className="text-sm text-slate-600 font-bold">
+                                                  {printOptions.printMode === 'cliente' ? 'Presupuesto de Obra' :
+                                                   printOptions.printMode === 'tecnico' ? 'Presupuesto Técnico' :
+                                                   printOptions.printMode === 'interno' ? 'Análisis de Costos' :
+                                                   'Cómputo y Presupuesto de Obra'}
+                                              </p>
+                                              {printOptions.printMode === 'interno' && (
+                                                  <span className="mt-1 inline-block text-[9px] font-bold uppercase tracking-widest bg-slate-900 text-white px-2 py-0.5 rounded">
+                                                      Confidencial — Uso Interno
+                                                  </span>
+                                              )}
                                           </div>
                                           {printOptions.showIcon && printLogo && (
                                               <img src={printLogo} alt="Project Logo" className="h-16 object-contain" />
@@ -858,92 +1506,243 @@ export const BudgetEditor: React.FC = () => {
                                   </div>
 
                                   {/* Report Table */}
-                                  <table className="w-full text-left border-collapse text-xs">
-                                      <thead>
-                                          <tr className="border-b-2 border-slate-800">
-                                              <th className="py-2 font-bold text-slate-700 uppercase">Ítem / Descripción</th>
-                                              <th className="py-2 text-center font-bold text-slate-700 w-12">Unid.</th>
-                                              {printOptions.showQuantity && <th className="py-2 text-center font-bold text-slate-700 w-16">Cant.</th>}
-                                              {printOptions.showUnitPrice && <th className="py-2 text-right font-bold text-slate-700 w-24">P. Unit.</th>}
-                                              {printOptions.showMatSubtotal && <th className="py-2 text-right font-bold text-slate-700 w-24">Mat. Total</th>}
-                                              {printOptions.showLabSubtotal && <th className="py-2 text-right font-bold text-slate-700 w-24">M.O. Total</th>}
-                                              {printOptions.showTotal && <th className="py-2 text-right font-bold text-slate-900 w-28">Total</th>}
-                                              {printOptions.showIncidence && <th className="py-2 text-right font-bold text-slate-900 w-16">% Inc.</th>}
-                                          </tr>
-                                      </thead>
-                                      <tbody>
-                                          {Array.from(selectedRubros).map((rubro) => {
-                                              const items = budgetData.grouped[rubro] || [];
-                                              if (items.length === 0) return null;
-                                              const totals = budgetData.categoryTotals[rubro];
-                                              const rubroIncidence = grandTotals.finalTotal > 0 ? (totals.total / grandTotals.finalTotal) * 100 : 0;
+                                  {printOptions.printMode === 'legacy' ? (
+                                      <table className="w-full text-left border-collapse text-xs">
+                                          <thead>
+                                              <tr className="border-b-2 border-slate-800">
+                                                  <th className="py-2 font-bold text-slate-700 uppercase">Ítem / Descripción</th>
+                                                  <th className="py-2 text-center font-bold text-slate-700 w-12">Unid.</th>
+                                                  {printOptions.showQuantity && <th className="py-2 text-center font-bold text-slate-700 w-16">Cant.</th>}
+                                                  {printOptions.showUnitPrice && <th className="py-2 text-right font-bold text-slate-700 w-24">P. Unit.</th>}
+                                                  {printOptions.showMatSubtotal && <th className="py-2 text-right font-bold text-slate-700 w-24">Mat. Total</th>}
+                                                  {printOptions.showLabSubtotal && <th className="py-2 text-right font-bold text-slate-700 w-24">M.O. Total</th>}
+                                                  {printOptions.showTotal && <th className="py-2 text-right font-bold text-slate-900 w-28">Total</th>}
+                                                  {printOptions.showIncidence && <th className="py-2 text-right font-bold text-slate-900 w-16">% Inc.</th>}
+                                              </tr>
+                                          </thead>
+                                          <tbody>
+                                              {Array.from(selectedRubros).map((rubro) => {
+                                                  const items = budgetData.grouped[rubro] || [];
+                                                  if (items.length === 0) return null;
+                                                  const totals = budgetData.categoryTotals[rubro];
+                                                  const rubroIncidence = grandTotals.finalTotal > 0 ? (totals.total / grandTotals.finalTotal) * 100 : 0;
 
-                                              return (
-                                                  <React.Fragment key={rubro}>
-                                                      {printOptions.showCategoryHeaders && (
-                                                          <tr className="bg-slate-100 break-inside-avoid">
-                                                              <td colSpan={10} className="py-2 px-2 font-bold text-slate-800 uppercase text-[10px] tracking-wider border-t border-slate-300 mt-4">
-                                                                  {rubro}
-                                                              </td>
-                                                          </tr>
-                                                      )}
-                                                      {items.map((row) => {
-                                                          const itemIncidence = grandTotals.finalTotal > 0 ? (row.totalItem / grandTotals.finalTotal) * 100 : 0;
+                                                  return (
+                                                      <React.Fragment key={rubro}>
+                                                          {printOptions.showCategoryHeaders && (
+                                                              <tr className="bg-slate-100 break-inside-avoid">
+                                                                  <td colSpan={10} className="py-2 px-2 font-bold text-slate-800 uppercase text-[10px] tracking-wider border-t border-slate-300 mt-4">
+                                                                      {rubro}
+                                                                  </td>
+                                                              </tr>
+                                                          )}
+                                                          {items.map((row) => {
+                                                              const itemIncidence = grandTotals.finalTotal > 0 ? (row.totalItem / grandTotals.finalTotal) * 100 : 0;
+                                                              return (
+                                                                <tr key={row.item.id} className="border-b border-slate-100 break-inside-avoid">
+                                                                    <td className="py-1.5 pr-2">
+                                                                        <div className="font-medium text-slate-800">{row.task.name}</div>
+                                                                        <div className="text-[9px] text-slate-500">{row.task.code}</div>
+                                                                    </td>
+                                                                    <td className="py-1.5 text-center text-slate-500">{row.task.unit}</td>
+                                                                    {printOptions.showQuantity && <td className="py-1.5 text-center font-mono font-bold text-slate-700">{row.item.quantity}</td>}
+                                                                    {printOptions.showUnitPrice && <td className="py-1.5 text-right font-mono text-slate-600">${row.analysis.totalUnitCost.toFixed(2)}</td>}
+                                                                    {printOptions.showMatSubtotal && <td className="py-1.5 text-right font-mono text-slate-600">${row.totalMatEq.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                                    {printOptions.showLabSubtotal && <td className="py-1.5 text-right font-mono text-slate-600">${row.totalLab.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                                    {printOptions.showTotal && <td className="py-1.5 text-right font-mono font-bold text-slate-900">${row.totalItem.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                                    {printOptions.showIncidence && <td className="py-1.5 text-right font-mono text-slate-500 text-[10px]">{itemIncidence.toFixed(2)}%</td>}
+                                                                </tr>
+                                                              );
+                                                          })}
+                                                          {printOptions.showCategoryHeaders && (
+                                                              <tr className="break-inside-avoid bg-slate-50 border-t border-slate-300">
+                                                                  <td colSpan={2} className="py-2 text-right font-bold text-[10px] text-slate-500 uppercase">Subtotal {rubro}</td>
+                                                                  {printOptions.showQuantity && <td></td>}
+                                                                  {printOptions.showUnitPrice && <td></td>}
+                                                                  {printOptions.showMatSubtotal && <td className="py-2 text-right font-mono font-bold text-slate-700">${totals.mat.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                                  {printOptions.showLabSubtotal && <td className="py-2 text-right font-mono font-bold text-slate-700">${totals.lab.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                                  {printOptions.showTotal && <td className="py-2 text-right font-mono font-bold text-slate-900">${totals.total.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
+                                                                  {printOptions.showIncidence && <td className="py-2 text-right font-mono font-bold text-slate-900">{rubroIncidence.toFixed(2)}%</td>}
+                                                              </tr>
+                                                          )}
+                                                      </React.Fragment>
+                                                  );
+                                              })}
+                                          </tbody>
+                                      </table>
+                                  ) : (() => {
+                                      const pm = printOptions.printMode;
+                                      const isCliente = pm === 'cliente';
+                                      const isTecnico = pm === 'tecnico';
+                                      const isInterno = pm === 'interno';
+                                      const isResumido = pm === 'resumido';
+
+                                      if (isResumido) {
+                                          const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2 });
+                                          return (
+                                              <table className="w-full text-left border-collapse text-xs">
+                                                  <thead>
+                                                      <tr className="border-b-2 border-slate-800">
+                                                          <th className="py-2 font-bold text-slate-700 uppercase">Rubro / Capítulo</th>
+                                                          <th className="py-2 text-right font-bold text-slate-700 w-32">CD Total</th>
+                                                          <th className="py-2 text-right font-bold text-slate-700 w-16">Inc. %</th>
+                                                          <th className="py-2 text-right font-bold text-slate-900 w-36">Precio de Venta</th>
+                                                      </tr>
+                                                  </thead>
+                                                  <tbody>
+                                                      {Array.from(selectedRubros).map(rubro => {
+                                                          const rubroItems = budgetData.grouped[rubro] || [];
+                                                          if (rubroItems.length === 0) return null;
+                                                          const rubroDC  = budgetData.categoryTotals[rubro]?.total ?? 0;
+                                                          const rubroPV  = rubroItems.reduce((s, r) => s + (breakdownByItemId[r.item.id]?.salePriceTotal ?? 0), 0);
+                                                          const rubroInc = grandTotals.subtotal > 0 ? (rubroDC / grandTotals.subtotal * 100) : 0;
                                                           return (
-                                                            <tr key={row.item.id} className="border-b border-slate-100 break-inside-avoid">
-                                                                <td className="py-1.5 pr-2">
-                                                                    <div className="font-medium text-slate-800">{row.task.name}</div>
-                                                                    <div className="text-[9px] text-slate-500">{row.task.code}</div>
-                                                                </td>
-                                                                <td className="py-1.5 text-center text-slate-500">{row.task.unit}</td>
-                                                                {printOptions.showQuantity && <td className="py-1.5 text-center font-mono font-bold text-slate-700">{row.item.quantity}</td>}
-                                                                {printOptions.showUnitPrice && <td className="py-1.5 text-right font-mono text-slate-600">${row.analysis.totalUnitCost.toFixed(2)}</td>}
-                                                                {printOptions.showMatSubtotal && <td className="py-1.5 text-right font-mono text-slate-600">${row.totalMatEq.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                                {printOptions.showLabSubtotal && <td className="py-1.5 text-right font-mono text-slate-600">${row.totalLab.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                                {printOptions.showTotal && <td className="py-1.5 text-right font-mono font-bold text-slate-900">${row.totalItem.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                                {printOptions.showIncidence && <td className="py-1.5 text-right font-mono text-slate-500 text-[10px]">{itemIncidence.toFixed(2)}%</td>}
-                                                            </tr>
+                                                              <tr key={rubro} className="border-b border-slate-100">
+                                                                  <td className="py-2 font-bold text-slate-800 uppercase text-[11px] tracking-wide">{rubro}</td>
+                                                                  <td className="py-2 text-right font-mono text-slate-600">${fmt(rubroDC)}</td>
+                                                                  <td className="py-2 text-right font-mono text-slate-500 text-[10px]">{rubroInc.toFixed(1)}%</td>
+                                                                  <td className="py-2 text-right font-mono font-bold text-slate-900">${fmt(rubroPV)}</td>
+                                                              </tr>
                                                           );
                                                       })}
-                                                      {printOptions.showCategoryHeaders && (
-                                                          <tr className="break-inside-avoid bg-slate-50 border-t border-slate-300">
-                                                              <td colSpan={2} className="py-2 text-right font-bold text-[10px] text-slate-500 uppercase">Subtotal {rubro}</td>
-                                                              {printOptions.showQuantity && <td></td>}
-                                                              {printOptions.showUnitPrice && <td></td>}
-                                                              {printOptions.showMatSubtotal && <td className="py-2 text-right font-mono font-bold text-slate-700">${totals.mat.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                              {printOptions.showLabSubtotal && <td className="py-2 text-right font-mono font-bold text-slate-700">${totals.lab.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                              {printOptions.showTotal && <td className="py-2 text-right font-mono font-bold text-slate-900">${totals.total.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>}
-                                                              {printOptions.showIncidence && <td className="py-2 text-right font-mono font-bold text-slate-900">{rubroIncidence.toFixed(2)}%</td>}
-                                                          </tr>
-                                                      )}
-                                                  </React.Fragment>
-                                              );
-                                          })}
-                                      </tbody>
-                                  </table>
+                                                  </tbody>
+                                              </table>
+                                          );
+                                      }
+                                      // colSpan for the "Subtotal rubro" label cell:
+                                      // Cliente:  Desc + Unid + Cant + PVUnit         = 4 label cols, 1 value col
+                                      // Técnico:  Desc + Unid + Cant + CDUnit + PVUnit = 5 label cols, 1 value col
+                                      // Interno:  Desc + Unid + Cant + CDTot + Inc + GGD + GGI + Benef + Imp = 9 label cols, 1 value col
+                                      const subtotalLabelColSpan = isInterno ? 9 : isTecnico ? 5 : 4;
+                                      return (
+                                          <table className="w-full text-left border-collapse text-xs">
+                                              <thead>
+                                                  <tr className="border-b-2 border-slate-800">
+                                                      <th className="py-2 font-bold text-slate-700 uppercase">Ítem / Descripción</th>
+                                                      <th className="py-2 text-center font-bold text-slate-700 w-12">Unid.</th>
+                                                      <th className="py-2 text-center font-bold text-slate-700 w-16">Cant.</th>
+                                                      {isTecnico && <th className="py-2 text-right font-bold text-slate-700 w-24">CD Unit.</th>}
+                                                      {isInterno && <th className="py-2 text-right font-bold text-slate-700 w-24">CD Total</th>}
+                                                      {isInterno && <th className="py-2 text-right font-bold text-slate-700 w-14">Inc. %</th>}
+                                                      {isInterno && <th className="py-2 text-right font-bold text-slate-700 w-20">GGD</th>}
+                                                      {isInterno && <th className="py-2 text-right font-bold text-slate-700 w-20">GGI</th>}
+                                                      {isInterno && <th className="py-2 text-right font-bold text-slate-700 w-20">Benef.</th>}
+                                                      {isInterno && <th className="py-2 text-right font-bold text-slate-700 w-20">Imp.</th>}
+                                                      {!isInterno && <th className="py-2 text-right font-bold text-slate-700 w-24">PV Unit.</th>}
+                                                      <th className="py-2 text-right font-bold text-slate-900 w-28">PV Total</th>
+                                                  </tr>
+                                              </thead>
+                                              <tbody>
+                                                  {Array.from(selectedRubros).map((rubro) => {
+                                                      const items = budgetData.grouped[rubro] || [];
+                                                      if (items.length === 0) return null;
+                                                      const rubroSaleTotal = items.reduce((sum, row) => {
+                                                          const bd = breakdownByItemId[row.item.id];
+                                                          return sum + (bd?.salePriceTotal ?? 0);
+                                                      }, 0);
+                                                      return (
+                                                          <React.Fragment key={rubro}>
+                                                              {printOptions.showCategoryHeaders && (
+                                                                  <tr className="bg-slate-100 break-inside-avoid">
+                                                                      <td colSpan={10} className="py-2 px-2 font-bold text-slate-800 uppercase text-[10px] tracking-wider border-t border-slate-300 mt-4">
+                                                                          {rubro}
+                                                                      </td>
+                                                                  </tr>
+                                                              )}
+                                                              {items.map((row) => {
+                                                                  const bd = breakdownByItemId[row.item.id];
+                                                                  const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2 });
+                                                                  return (
+                                                                      <tr key={row.item.id} className="border-b border-slate-100 break-inside-avoid">
+                                                                          <td className="py-1.5 pr-2">
+                                                                              <div className="font-medium text-slate-800">{row.task.name}</div>
+                                                                              <div className="text-[9px] text-slate-500">{row.task.code}</div>
+                                                                          </td>
+                                                                          <td className="py-1.5 text-center text-slate-500">{row.task.unit}</td>
+                                                                          <td className="py-1.5 text-center font-mono font-bold text-slate-700">{row.item.quantity}</td>
+                                                                          {isTecnico && <td className="py-1.5 text-right font-mono text-slate-600">${fmt(bd?.directCostUnit ?? 0)}</td>}
+                                                                          {isInterno && <td className="py-1.5 text-right font-mono text-slate-600">${fmt(bd?.directCostTotal ?? 0)}</td>}
+                                                                          {isInterno && <td className="py-1.5 text-right font-mono text-slate-500 text-[10px]">{((bd?.incidence ?? 0) * 100).toFixed(2)}%</td>}
+                                                                          {isInterno && <td className="py-1.5 text-right font-mono text-slate-600">${fmt(bd?.ggdAllocated ?? 0)}</td>}
+                                                                          {isInterno && <td className="py-1.5 text-right font-mono text-slate-600">${fmt(bd?.ggiAllocated ?? 0)}</td>}
+                                                                          {isInterno && <td className="py-1.5 text-right font-mono text-slate-600">${fmt(bd?.profitAllocated ?? 0)}</td>}
+                                                                          {isInterno && <td className="py-1.5 text-right font-mono text-slate-600">${fmt(bd?.taxAllocated ?? 0)}</td>}
+                                                                          {!isInterno && <td className="py-1.5 text-right font-mono text-slate-700">${fmt(bd?.salePriceUnit ?? 0)}</td>}
+                                                                          <td className="py-1.5 text-right font-mono font-bold text-slate-900">${fmt(bd?.salePriceTotal ?? 0)}</td>
+                                                                      </tr>
+                                                                  );
+                                                              })}
+                                                              {printOptions.showCategoryHeaders && (
+                                                                  <tr className="break-inside-avoid bg-slate-50 border-t border-slate-300">
+                                                                      <td colSpan={subtotalLabelColSpan} className="py-2 text-right font-bold text-[10px] text-slate-500 uppercase">Subtotal {rubro}</td>
+                                                                      <td className="py-2 text-right font-mono font-bold text-slate-900">${rubroSaleTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                                                                  </tr>
+                                                              )}
+                                                          </React.Fragment>
+                                                      );
+                                                  })}
+                                              </tbody>
+                                          </table>
+                                      );
+                                  })()}
 
                                   {/* Footer Totals */}
                                   {printOptions.showFooter && (
-                                      <div className="mt-8 border-t-2 border-slate-800 pt-4 break-inside-avoid">
-                                          <div className="flex justify-end gap-8">
-                                              {printOptions.showMatSubtotal && (
+                                      printOptions.printMode === 'legacy' ? (
+                                          <div className="mt-8 border-t-2 border-slate-800 pt-4 break-inside-avoid">
+                                              <div className="flex justify-end gap-8">
+                                                  {printOptions.showMatSubtotal && (
+                                                      <div className="text-right">
+                                                          <div className="text-[10px] font-bold text-slate-500 uppercase">Total Materiales</div>
+                                                          <div className="text-sm font-mono font-bold text-slate-800">${grandTotals.mat.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                                      </div>
+                                                  )}
+                                                  {printOptions.showLabSubtotal && (
+                                                      <div className="text-right">
+                                                          <div className="text-[10px] font-bold text-slate-500 uppercase">Total Mano de Obra</div>
+                                                          <div className="text-sm font-mono font-bold text-slate-800">${grandTotals.lab.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                                      </div>
+                                                  )}
                                                   <div className="text-right">
-                                                      <div className="text-[10px] font-bold text-slate-500 uppercase">Total Materiales</div>
-                                                      <div className="text-sm font-mono font-bold text-slate-800">${grandTotals.mat.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                                      <div className="text-[10px] font-bold text-slate-500 uppercase">TOTAL GENERAL</div>
+                                                      <div className="text-xl font-black text-slate-900 font-mono">${grandTotals.finalTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
                                                   </div>
-                                              )}
-                                              {printOptions.showLabSubtotal && (
-                                                  <div className="text-right">
-                                                      <div className="text-[10px] font-bold text-slate-500 uppercase">Total Mano de Obra</div>
-                                                      <div className="text-sm font-mono font-bold text-slate-800">${grandTotals.lab.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                                                  </div>
-                                              )}
-                                              <div className="text-right">
-                                                  <div className="text-[10px] font-bold text-slate-500 uppercase">TOTAL GENERAL</div>
-                                                  <div className="text-xl font-black text-slate-900 font-mono">${grandTotals.finalTotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
                                               </div>
                                           </div>
-                                      </div>
+                                      ) : (
+                                          <div className="mt-8 border-t-2 border-slate-800 pt-4 break-inside-avoid">
+                                              {/* Interno/Resumido: full Cuadro Empresario breakdown row */}
+                                              {(printOptions.printMode === 'interno' || printOptions.printMode === 'resumido') && (
+                                                  <div className="flex justify-end gap-6 mb-4 pb-3 border-b border-slate-200 text-xs">
+                                                      {[
+                                                          { label: 'Costo Directo',   val: grandTotals.subtotal },
+                                                          { label: 'GGD',             val: budgetKSummary.ggdAmount },
+                                                          { label: 'GGI',             val: budgetKSummary.ggiAmount },
+                                                          { label: 'Beneficio',       val: budgetKSummary.profitAmount },
+                                                          { label: 'Impuestos',       val: budgetKSummary.taxAmount },
+                                                      ].map(({ label, val }) => (
+                                                          <div key={label} className="text-right">
+                                                              <div className="text-[10px] font-bold text-slate-500 uppercase">{label}</div>
+                                                              <div className="font-mono text-slate-700">${val.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                                                          </div>
+                                                      ))}
+                                                  </div>
+                                              )}
+                                              {/* Técnico: CD total alongside sale price */}
+                                              <div className="flex justify-end gap-8 items-end">
+                                                  {printOptions.printMode === 'tecnico' && (
+                                                      <div className="text-right">
+                                                          <div className="text-[10px] font-bold text-slate-500 uppercase">Costo Directo Total</div>
+                                                          <div className="text-sm font-mono font-bold text-slate-700">${grandTotals.subtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                                                      </div>
+                                                  )}
+                                                  <div className="text-right">
+                                                      <div className="text-[10px] font-bold text-slate-500 uppercase">Precio de Venta</div>
+                                                      <div className="text-xl font-black text-slate-900 font-mono">${budgetKSummary.finalSalePrice.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                                                  </div>
+                                              </div>
+                                          </div>
+                                      )
                                   )}
                               </div>
                           </div>

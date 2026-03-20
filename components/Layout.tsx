@@ -1,9 +1,10 @@
 
 import React, { useState } from 'react';
-import { LayoutDashboard, Calculator, CalendarDays, Settings, HardHat, Wrench, SlidersHorizontal, Table, Truck, TrendingUp, Users, LogOut, Ruler, FileText, ClipboardCheck, Save, CheckCircle2, ArrowLeftRight, Building, Menu, ChevronLeft } from 'lucide-react';
+import { LayoutDashboard, Calculator, CalendarDays, Settings, HardHat, Wrench, SlidersHorizontal, Table, Truck, TrendingUp, Users, LogOut, Ruler, FileText, ClipboardCheck, Save, CheckCircle2, X, ArrowLeftRight, Building, Menu, ChevronLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Role } from '../types';
 import { useERP } from '../context/ERPContext';
+import { useSave } from '../context/SaveContext';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -13,14 +14,25 @@ interface LayoutProps {
 
 export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab }) => {
   const { user, logout } = useAuth();
-  const { project, saveProject, exitProject } = useERP();
-  const [isSaving, setIsSaving] = useState(false);
+  const { project, exitProject } = useERP();
+  const { saveHandler } = useSave();
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
+  const canSave = saveHandler !== null;
+
   const handleGlobalSave = async () => {
-      setIsSaving(true);
-      await saveProject();
-      setIsSaving(false);
+    if (!saveHandler) return;
+    setSaveStatus('saving');
+    try {
+      await saveHandler();
+      setSaveStatus('ok');
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    } catch (err) {
+      console.error('[Layout] handleGlobalSave:', err);
+      setSaveStatus('error');
+      setTimeout(() => setSaveStatus('idle'), 3000);
+    }
   };
 
   // Define menu items with required permissions
@@ -106,16 +118,23 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
         </nav>
         
         <div className="p-4 border-t border-slate-800 space-y-2 bg-slate-900">
-            <button 
+            <button
                 onClick={handleGlobalSave}
-                disabled={isSaving}
-                className={`w-full flex items-center justify-center gap-2 text-white text-sm font-bold px-4 py-3 rounded-lg transition-all shadow-md ${isSaving ? 'bg-emerald-600' : 'bg-blue-700 hover:bg-blue-600'}`}
+                disabled={!canSave || saveStatus === 'saving' || saveStatus === 'ok'}
+                title={!canSave ? 'Esta vista se guarda automáticamente' : 'Guardar cambios de esta vista'}
+                className={`w-full flex items-center justify-center gap-2 text-sm font-bold px-4 py-3 rounded-lg transition-all shadow-md disabled:cursor-not-allowed ${
+                    saveStatus === 'ok'     ? 'bg-green-600 text-white' :
+                    saveStatus === 'error'  ? 'bg-red-600 text-white opacity-90' :
+                    saveStatus === 'saving' ? 'bg-blue-400 text-white' :
+                    canSave                 ? 'bg-blue-700 hover:bg-blue-600 text-white' :
+                                             'bg-slate-700 text-slate-500'
+                }`}
             >
-                {isSaving ? (
-                    <><CheckCircle2 size={18} className="animate-bounce"/> Guardando...</>
-                ) : (
-                    <><Save size={18} /> Guardar Todo</>
-                )}
+                {saveStatus === 'ok'     ? <><CheckCircle2 size={18}/> Guardado ✓</> :
+                 saveStatus === 'error'  ? <><X size={18}/> Error al guardar</> :
+                 saveStatus === 'saving' ? <><CheckCircle2 size={18} className="animate-spin"/> Guardando...</> :
+                 canSave                 ? <><Save size={18}/> Guardar</> :
+                                          <><Save size={18}/> Auto-guardado</>}
             </button>
 
             <button onClick={logout} className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-red-400 text-xs font-bold px-4 py-2 hover:bg-slate-800 rounded-lg transition-colors mt-2">

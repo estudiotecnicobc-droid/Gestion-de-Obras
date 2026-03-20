@@ -1,6 +1,10 @@
 import React, { useMemo, useState, useRef } from 'react';
+import { printDocument } from '../utils/printDocument';
+import { generateId } from '../utils/generateId';
 import { useERP } from '../context/ERPContext';
+import { ProjectCertificate, ProjectCertificateItem } from '../types';
 import { calculateUnitPrice, addDays, calculateDuration } from '../services/calculationService';
+import { useProjectSchedule } from '../hooks/useProjectSchedule';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Line, ComposedChart, ReferenceLine, ScatterChart, Scatter, ZAxis, Bar
 } from 'recharts';
@@ -11,17 +15,36 @@ import {
 } from 'lucide-react';
 
 export const ManagementPanel: React.FC = () => {
-  const { 
-    project, tasks, materials, yields, tools, toolYields, snapshots, receptions, 
+  const {
+    project, tasks, materials, yields, tools, toolYields, snapshots, receptions,
     yieldsIndex, materialsMap, toolYieldsIndex, toolsMap,
-    taskCrewYieldsIndex, crewsMap, laborCategoriesMap, taskLaborYieldsIndex
+    taskCrewYieldsIndex, crewsMap, laborCategoriesMap, taskLaborYieldsIndex,
+    projectCertificates, addProjectCertificate
   } = useERP();
+
+  const { evm: evmStats, itemCosts } = useProjectSchedule();
   
-  // --- States for Certificate Preview ---
-  const [showCertPreview, setShowCertPreview] = useState(false);
+  // --- States for Certificate ---
+  // previewCert: certificado a mostrar en el modal (null = modal cerrado).
+  // Siempre muestra un snapshot guardado; no hay "preview en vivo sin guardar".
+  const [previewCert, setPreviewCert] = useState<ProjectCertificate | null>(null);
+  const [certPeriod, setCertPeriod] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [certScale, setCertScale] = useState(1);
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
+  const certificatePrintRef = useRef<HTMLDivElement | null>(null);
+
+  const handlePrintCertificate = () => {
+    const el = certificatePrintRef.current;
+    if (!el) return;
+    printDocument({
+      title: 'Certificado de Obra',
+      html: el.innerHTML,
+      pageSize: 'a4',
+      pageOrientation: 'portrait',
+      pageMargin: '15mm',
+    });
+  };
 
   // --- States for Crashing Simulator ---
   const [selectedTaskIdForCrash, setSelectedTaskIdForCrash] = useState<string>('');
@@ -29,85 +52,6 @@ export const ManagementPanel: React.FC = () => {
       addedCrews: 0,     // Cuadrillas extra (misma eficiencia, costo lineal)
       overtimePercent: 0 // Horas extra (mayor costo unitario, reduce tiempo)
   });
-
-  // --- 1. GLOBAL EVM CALCULATIONS ---
-  const evmStats = useMemo(() => {
-      const today = new Date();
-      let BAC = 0; // Budget at Completion
-      let PV_Total = 0; // Planned Value (up to today)
-      let EV_Total = 0; // Earned Value (up to today)
-      let AC_Total = 0; // Actual Cost (up to today)
-
-      // 1. Calculate BAC and EV per item
-      project.items.forEach(item => {
-          const task = tasks.find(t => t.id === item.taskId);
-          if (!task) return;
-          const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
-          const itemTotalBudget = analysis.totalUnitCost * item.quantity;
-          
-          // BAC
-          BAC += itemTotalBudget;
-
-          // EV (Budget * % Progress)
-          const progress = item.progress || 0;
-          EV_Total += itemTotalBudget * (progress / 100);
-
-          // PV (Planned up to today) logic
-          const startDate = new Date(item.startDate || project.startDate);
-          // Use updated calculateDuration (assuming 1 crew for base plan comparison, or use item.crewsAssigned if strictly following current plan)
-          // For Standard PV (Baseline), we often use the original duration. Let's use current plan configuration.
-          const duration = item.manualDuration || calculateDuration(item.quantity, task.dailyYield, item.crewsAssigned || 1);
-          const endDate = addDays(startDate, duration);
-          const endObj = new Date(endDate);
-
-          if (today >= endObj) {
-              PV_Total += itemTotalBudget; // Task should be done
-          } else if (today > startDate) {
-              // Task in progress, linear interpolation
-              const totalTime = endObj.getTime() - startDate.getTime();
-              const elapsedTime = today.getTime() - startDate.getTime();
-              const percentTime = Math.min(1, Math.max(0, elapsedTime / totalTime));
-              PV_Total += itemTotalBudget * percentTime;
-          }
-      });
-
-      // 2. Calculate AC (Actual Cost)
-      // A. Materials from Receptions (Real Cost)
-      let acMaterials = 0;
-      receptions.forEach(r => {
-          r.items.forEach(ri => {
-              const mat = materialsMap[ri.materialId];
-              if (mat) acMaterials += mat.cost * ri.quantityReceived;
-          });
-      });
-
-      // B. Labor/Tools (Inferred from EV as we don't have timesheets in this MVP)
-      // To simulate reality, let's assume Labor Actuals = Labor EV * 1.0 (on budget) or slight variance if needed.
-      let evLaborAndTools = 0;
-      project.items.forEach(item => {
-          const task = tasks.find(t => t.id === item.taskId);
-          if (task) {
-              const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
-              const nonMatCost = (analysis.laborCost + analysis.toolCost) * item.quantity;
-              evLaborAndTools += nonMatCost * ((item.progress || 0) / 100);
-          }
-      });
-      AC_Total = acMaterials + evLaborAndTools;
-
-      // 3. EVM Metrics
-      const CV = EV_Total - AC_Total; // Cost Variance
-      const SV = EV_Total - PV_Total; // Schedule Variance
-      const CPI = AC_Total > 0 ? EV_Total / AC_Total : 1; // Cost Performance Index
-      const SPI = PV_Total > 0 ? EV_Total / PV_Total : 1; // Schedule Performance Index
-      
-      // Projections
-      const EAC = CPI > 0 ? BAC / CPI : BAC; // Estimate at Completion
-      const ETC = EAC - AC_Total; // Estimate to Complete
-      const VAC = BAC - EAC; // Variance at Completion
-
-      return { BAC, PV: PV_Total, EV: EV_Total, AC: AC_Total, CV, SV, CPI, SPI, EAC, ETC, VAC };
-  }, [project, tasks, receptions, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap]);
-
 
   // --- 2. S-Curve Data Generation (Enhanced) ---
   const sCurveData = useMemo(() => {
@@ -169,21 +113,15 @@ export const ManagementPanel: React.FC = () => {
 
   // --- ABC (PARETO) ANALYSIS ---
   const abcAnalysis = useMemo(() => {
-      // 1. Calculate individual total costs
-      const rawItems = project.items.map(item => {
-          const task = tasks.find(t => t.id === item.taskId);
-          if (!task) return null;
-          const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
-          const totalCost = analysis.totalUnitCost * item.quantity;
-          return {
-              id: item.id,
-              name: task.name,
-              category: task.category,
-              cost: totalCost,
-              quantity: item.quantity,
-              unit: task.unit
-          };
-      }).filter(Boolean) as any[];
+      // 1. Costos por ítem — ya calculados en useProjectSchedule, sin recálculo.
+      const rawItems = itemCosts.map(ic => ({
+          id:       ic.id,
+          name:     ic.taskName,
+          category: ic.category,
+          cost:     ic.totalCost,
+          quantity: ic.quantity,
+          unit:     ic.unit,
+      }));
 
       // 2. Sort descending by Cost
       rawItems.sort((a, b) => b.cost - a.cost);
@@ -235,7 +173,7 @@ export const ManagementPanel: React.FC = () => {
           chartData: analyzedItems.slice(0, 20), // Show top 20 in chart
           stats
       };
-  }, [project.items, tasks, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap]);
+  }, [itemCosts]);
 
   // --- 3. Critical Deviations Logic ---
   const deviations = useMemo(() => {
@@ -263,30 +201,6 @@ export const ManagementPanel: React.FC = () => {
       return diffs.sort((a,b) => b.percent - a.percent);
   }, [materials, snapshots]);
 
-  // --- 4. Certificate Data ---
-  const certificateData = useMemo(() => {
-      return project.items.map(item => {
-          const task = tasks.find(t => t.id === item.taskId);
-          const analysis = task ? calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex) : { totalUnitCost: 0 };
-          const totalAmount = analysis.totalUnitCost * item.quantity;
-          const progress = item.progress || 0;
-          const amountDone = totalAmount * (progress / 100);
-
-          return {
-              description: task?.name,
-              unit: task?.unit,
-              quantity: item.quantity,
-              unitPrice: analysis.totalUnitCost,
-              totalAmount,
-              progress,
-              amountDone
-          };
-      });
-  }, [project, tasks, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap]);
-
-  const totalCertificateAmount = certificateData.reduce((acc, curr) => acc + curr.amountDone, 0);
-  const totalProjectAmount = certificateData.reduce((acc, curr) => acc + curr.totalAmount, 0);
-
   // --- 5. CRASHING SIMULATION LOGIC (PDF 3 Concept) ---
   const crashData = useMemo(() => {
       if (!selectedTaskIdForCrash) return null;
@@ -298,7 +212,7 @@ export const ManagementPanel: React.FC = () => {
       const baseCrews = budgetItem.crewsAssigned || 1;
       const baseYield = task.dailyYield * baseCrews;
       const normalDuration = Math.ceil(budgetItem.quantity / baseYield);
-      const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, 9, taskLaborYieldsIndex);
+      const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, project.workdayHours || 9, taskLaborYieldsIndex);
       const normalCost = analysis.totalUnitCost * budgetItem.quantity;
 
       // Crash Simulation Points (Curve Points)
@@ -382,6 +296,53 @@ export const ManagementPanel: React.FC = () => {
 
 
   // --- Handlers ---
+
+  /**
+   * Emite un certificado de avance de obra.
+   * Congela el estado actual de itemCosts (precios + avance) como snapshot inmutable,
+   * lo persiste en allProjectCertificates y abre el modal de preview.
+   *
+   * Número secuencial: max(números existentes para este proyecto) + 1.
+   * previouslyCertified: totalCertified del último certificado emitido (0 si es el primero).
+   */
+  const handleEmitCertificate = () => {
+    const lastCert = projectCertificates[projectCertificates.length - 1]; // ya vienen ordenados por number
+    const nextNumber = (lastCert?.number ?? 0) + 1;
+    const previouslyCertified = lastCert?.totalCertified ?? 0;
+
+    const certItems: ProjectCertificateItem[] = itemCosts.map(ic => ({
+      budgetItemId: ic.id,
+      taskId:       ic.taskId,
+      description:  ic.taskName,
+      unit:         ic.unit,
+      quantity:     ic.quantity,
+      unitPrice:    ic.unitCost,
+      totalBudgeted: ic.totalCost,
+      progressPercent: ic.progress,
+      amountCertified: ic.earnedValue,
+    }));
+
+    const totalCertified = certItems.reduce((acc, i) => acc + i.amountCertified, 0);
+
+    const cert: ProjectCertificate = {
+      id:                   generateId(),
+      organizationId:       project.organizationId,
+      projectId:            project.id,
+      number:               nextNumber,
+      period:               certPeriod,
+      date:                 new Date().toISOString(),
+      items:                certItems,
+      totalBudgeted:        evmStats.BAC,
+      totalCertified,
+      previouslyCertified,
+      thisPeriodAmount:     totalCertified - previouslyCertified,
+      status:               'issued',
+    };
+
+    addProjectCertificate(cert);
+    setPreviewCert(cert);
+  };
+
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -451,12 +412,24 @@ export const ManagementPanel: React.FC = () => {
                 <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider">{getProjectSituation()}</span>
             </div>
          </div>
-         <button 
-            onClick={() => setShowCertPreview(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg font-bold shadow-lg hover:bg-black transition-all"
-         >
-            <FileCheck size={18} /> Emitir Certificado
-         </button>
+         <div className="flex items-center gap-3">
+            <div className="flex flex-col items-end gap-1">
+               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Período</label>
+               <input
+                 type="month"
+                 value={certPeriod}
+                 onChange={e => setCertPeriod(e.target.value)}
+                 className="p-1.5 border border-slate-200 rounded text-sm font-mono text-slate-700 focus:outline-none focus:border-blue-400"
+               />
+            </div>
+            <button
+               onClick={handleEmitCertificate}
+               disabled={itemCosts.length === 0}
+               className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg font-bold shadow-lg hover:bg-black transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+               <FileCheck size={18} /> Emitir Certificado
+            </button>
+         </div>
       </div>
 
       {/* EVM INDICATORS ROW */}
@@ -824,10 +797,55 @@ export const ManagementPanel: React.FC = () => {
           </div>
       </div>
 
+      {/* --- HISTORIAL DE CERTIFICADOS EMITIDOS --- */}
+      {projectCertificates.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+          <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2">
+            <FileCheck size={18} className="text-blue-600" /> Certificados Emitidos
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs uppercase text-slate-400 border-b border-slate-100">
+                <tr>
+                  <th className="pb-2 pr-4">N°</th>
+                  <th className="pb-2 pr-4">Período</th>
+                  <th className="pb-2 pr-4">Fecha Emisión</th>
+                  <th className="pb-2 pr-4 text-right">Acumulado</th>
+                  <th className="pb-2 pr-4 text-right">Este Período</th>
+                  <th className="pb-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {projectCertificates.map(cert => (
+                  <tr key={cert.id} className="hover:bg-slate-50">
+                    <td className="py-2 pr-4 font-bold text-slate-800">N° {cert.number}</td>
+                    <td className="py-2 pr-4 font-mono text-slate-600">{cert.period}</td>
+                    <td className="py-2 pr-4 text-slate-500">{new Date(cert.date).toLocaleDateString()}</td>
+                    <td className="py-2 pr-4 text-right font-mono font-bold text-slate-800">
+                      ${cert.totalCertified.toLocaleString()}
+                    </td>
+                    <td className="py-2 pr-4 text-right font-mono text-emerald-700">
+                      +${cert.thisPeriodAmount.toLocaleString()}
+                    </td>
+                    <td className="py-2">
+                      <button
+                        onClick={() => setPreviewCert(cert)}
+                        className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1"
+                      >
+                        <FileText size={13} /> Ver
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* --- CERTIFICATE PREVIEW MODAL --- */}
-      {showCertPreview && (
+      {previewCert !== null && (
           <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex flex-col animate-in fade-in duration-200">
-             
              {/* Toolbar */}
              <div className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 flex-shrink-0">
                 <div className="flex items-center gap-4">
@@ -850,34 +868,36 @@ export const ManagementPanel: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-4">
-                    <button 
-                       onClick={() => window.print()}
+                    <button
+                       onClick={handlePrintCertificate}
                        className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-lg font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all"
                     >
                        <Printer size={18} /> Imprimir Certificado
                     </button>
-                    <button onClick={() => setShowCertPreview(false)} className="p-2 hover:bg-slate-100 rounded-full text-slate-500"><X size={24}/></button>
+                    <button onClick={() => setPreviewCert(null)} className="p-2 hover:bg-slate-100 rounded-full text-slate-500"><X size={24}/></button>
                 </div>
              </div>
 
              {/* Preview Area */}
              <div className="flex-1 overflow-auto bg-slate-500/10 p-8 flex justify-center items-start">
-                <div 
-                   id="print-portal"
+                <div
+                   id="certificate-print-root"
                    className="bg-white shadow-2xl transition-transform origin-top duration-200"
                    style={{ 
                       width: '210mm', minHeight: '297mm', padding: '15mm',
                       transform: `scale(${certScale})`
                    }}
                 >
-                    <div id="print-content" className="font-sans text-slate-900 flex flex-col h-full">
+                    <div ref={certificatePrintRef} id="print-content" className="font-sans text-slate-900 flex flex-col h-full">
                         
                         {/* Cert Header */}
                         <div className="flex justify-between items-start border-b-2 border-slate-900 pb-6 mb-8">
                            <div>
                               <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Documento Oficial</div>
-                              <h1 className="text-3xl font-black uppercase tracking-tight text-slate-900">Certificado de Obra</h1>
-                              <div className="mt-2 text-sm font-medium">Período: {new Date().toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}</div>
+                              <h1 className="text-3xl font-black uppercase tracking-tight text-slate-900">Certificado de Obra N° {previewCert.number}</h1>
+                              <div className="mt-2 text-sm font-medium">
+                                Período: {new Date(previewCert.period + '-02').toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
+                              </div>
                            </div>
                            {companyLogo ? (
                                <img src={companyLogo} alt="Logo" className="h-16 object-contain max-w-[200px]" />
@@ -905,7 +925,7 @@ export const ManagementPanel: React.FC = () => {
                              </div>
                              <div className="flex justify-between border-b border-slate-200 pb-1">
                                  <span className="text-slate-500 font-medium">Fecha Emisión:</span>
-                                 <span className="font-bold text-slate-900">{new Date().toLocaleDateString()}</span>
+                                 <span className="font-bold text-slate-900">{new Date(previewCert.date).toLocaleDateString()}</span>
                              </div>
                         </div>
 
@@ -924,26 +944,30 @@ export const ManagementPanel: React.FC = () => {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {certificateData.map((row, i) => (
+                                    {(previewCert.items ?? []).map((row, i) => (
                                         <tr key={i} className="even:bg-slate-50">
                                             <td className="p-2 border border-slate-300 font-medium">{row.description}</td>
                                             <td className="p-2 border border-slate-300 text-center">{row.unit}</td>
                                             <td className="p-2 border border-slate-300 text-right">{row.quantity}</td>
-                                            <td className="p-2 border border-slate-300 text-right">${row.unitPrice.toLocaleString()}</td>
-                                            <td className="p-2 border border-slate-300 text-right">${row.totalAmount.toLocaleString()}</td>
-                                            <td className="p-2 border border-slate-300 text-center">{row.progress}%</td>
-                                            <td className="p-2 border border-slate-300 text-right font-bold">${row.amountDone.toLocaleString()}</td>
+                                            <td className="p-2 border border-slate-300 text-right">${(row.unitPrice ?? 0).toLocaleString()}</td>
+                                            <td className="p-2 border border-slate-300 text-right">${(row.totalBudgeted ?? 0).toLocaleString()}</td>
+                                            <td className="p-2 border border-slate-300 text-center">{row.progressPercent}%</td>
+                                            <td className="p-2 border border-slate-300 text-right font-bold">${(row.amountCertified ?? 0).toLocaleString()}</td>
                                         </tr>
                                     ))}
                                 </tbody>
                                 <tfoot>
                                     <tr className="bg-slate-900 text-white font-bold">
-                                        <td colSpan={6} className="p-3 text-right uppercase tracking-wide">Total Certificado Bruto</td>
-                                        <td className="p-3 text-right text-lg">${totalCertificateAmount.toLocaleString()}</td>
+                                        <td colSpan={6} className="p-3 text-right uppercase tracking-wide">Total Certificado Acumulado</td>
+                                        <td className="p-3 text-right text-lg">${(previewCert.totalCertified ?? 0).toLocaleString()}</td>
+                                    </tr>
+                                    <tr className="bg-emerald-50 font-bold text-emerald-800">
+                                        <td colSpan={6} className="p-2 text-right uppercase text-[10px]">Este Período</td>
+                                        <td className="p-2 text-right">+${(previewCert.thisPeriodAmount ?? 0).toLocaleString()}</td>
                                     </tr>
                                     <tr className="bg-slate-100 font-bold text-slate-600">
-                                        <td colSpan={6} className="p-2 text-right uppercase text-[10px]">Total Contrato Original</td>
-                                        <td className="p-2 text-right">${totalProjectAmount.toLocaleString()}</td>
+                                        <td colSpan={6} className="p-2 text-right uppercase text-[10px]">Presupuesto Total (BAC)</td>
+                                        <td className="p-2 text-right">${(previewCert.totalBudgeted ?? 0).toLocaleString()}</td>
                                     </tr>
                                 </tfoot>
                             </table>

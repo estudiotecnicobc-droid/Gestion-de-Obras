@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useERP } from '../context/ERPContext';
+import { generateId } from '../utils/generateId';
 import { useAuth } from '../context/AuthContext';
 import { 
   File, FileText, Image as ImageIcon, Box, MoreVertical, 
@@ -67,7 +68,7 @@ export const DocumentManager: React.FC = () => {
       }
 
       const newDoc: ProjectDocument = {
-          id: crypto.randomUUID(),
+          id: generateId(),
           organizationId: user?.organizationId || 'org_a',
           projectId: project.id,
           name: file.name,

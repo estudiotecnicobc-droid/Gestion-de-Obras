@@ -1,5 +1,7 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useERP } from '../context/ERPContext';
+import { useSave } from '../context/SaveContext';
+import { generateId } from '../utils/generateId';
 import { useAuth } from '../context/AuthContext';
 import { 
   Ruler, Plus, Save, Trash2, CheckCircle2, RotateCcw, 
@@ -10,6 +12,7 @@ import { MeasurementSheet, MeasurementLine, BudgetItem } from '../types';
 export const MeasurementSheetComponent: React.FC = () => {
   const { project, tasks, measurementSheets, saveMeasurementSheet, syncMeasurementToBudget, updateBudgetItem } = useERP();
   const { user } = useAuth();
+  const { registerSave, unregisterSave } = useSave();
 
   const [selectedBudgetItemId, setSelectedBudgetItemId] = useState<string>('');
   const [currentSheet, setCurrentSheet] = useState<MeasurementSheet | null>(null);
@@ -26,7 +29,7 @@ export const MeasurementSheetComponent: React.FC = () => {
           } else {
               // Create new draft
               setCurrentSheet({
-                  id: crypto.randomUUID(),
+                  id: generateId(),
                   organizationId: user?.organizationId || 'org_a',
                   budgetItemId: selectedBudgetItemId,
                   lines: [],
@@ -48,7 +51,7 @@ export const MeasurementSheetComponent: React.FC = () => {
   const handleAddLine = () => {
       if (!currentSheet) return;
       const newLine: MeasurementLine = {
-          id: crypto.randomUUID(),
+          id: generateId(),
           description: '',
           length: 1,
           width: 1,
@@ -95,13 +98,32 @@ export const MeasurementSheetComponent: React.FC = () => {
               updatedBy: user?.name || 'User'
           };
           saveMeasurementSheet(sheetToSave);
-          
+
           // Optionally auto-sync to budget
           if (window.confirm(`¿Sincronizar el total (${sheetToSave.totalQuantity.toFixed(2)}) con el ítem del presupuesto?`)) {
               syncMeasurementToBudget(sheetToSave.id);
           }
       }
   };
+
+  // Save sin confirm — para el botón global de Layout
+  const saveCurrentSheet = useCallback(async () => {
+      if (!currentSheet) return;
+      saveMeasurementSheet({
+          ...currentSheet,
+          lastUpdated: new Date().toISOString(),
+          updatedBy: user?.name || 'User',
+      });
+  }, [currentSheet, saveMeasurementSheet, user?.name]);
+
+  useEffect(() => {
+      if (currentSheet) {
+          registerSave(saveCurrentSheet);
+      } else {
+          unregisterSave();
+      }
+      return () => unregisterSave();
+  }, [currentSheet, saveCurrentSheet, registerSave, unregisterSave]);
 
   return (
     <div className="flex h-full gap-6 animate-in fade-in duration-500">

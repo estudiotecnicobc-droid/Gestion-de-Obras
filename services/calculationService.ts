@@ -8,61 +8,45 @@ const calculateHourlyLaborCost = (lc: LaborCategory) => {
 // Optimized Calculation using Maps/Indexes for O(1) access
 export const calculateUnitPrice = (
   task: Task,
-  yieldsIndex: Record<string, TaskYield[]>, // Pre-indexed by taskId
-  materialsMap: Record<string, Material>,   // Pre-indexed by materialId
-  toolYieldsIndex: Record<string, TaskToolYield[]>, // Pre-indexed by taskId
-  toolsMap: Record<string, Tool>,            // Pre-indexed by toolId
-  // New Crew params (optional for backward compact)
+  yieldsIndex: Record<string, TaskYield[]>,
+  materialsMap: Record<string, Material>,
+  toolYieldsIndex: Record<string, TaskToolYield[]>,
+  toolsMap: Record<string, Tool>,
   taskCrewYieldsIndex?: Record<string, TaskCrewYield[]>,
   crewsMap?: Record<string, Crew>,
   laborCategoriesMap?: Record<string, LaborCategory>,
   workdayHours: number = 9,
-  taskLaborYieldsIndex?: Record<string, TaskLaborYield[]> // New Param for Individual Labor
+  taskLaborYieldsIndex?: Record<string, TaskLaborYield[]>
 ): UnitPriceAnalysis => {
-  
-  // 1. Calculate Materials Cost
+
   const taskYields = yieldsIndex[task.id] || [];
   let totalMaterialCost = 0;
-  
   for (const y of taskYields) {
     const material = materialsMap[y.materialId];
-    if (material) {
-      totalMaterialCost += (material.cost || 0) * y.quantity;
-    }
+    if (material) totalMaterialCost += (material.cost || 0) * y.quantity;
   }
 
-  // 2. Calculate Tools Cost
   const taskToolYields = toolYieldsIndex[task.id] || [];
   let totalToolCost = 0;
-
   for (const y of taskToolYields) {
     const tool = toolsMap[y.toolId];
-    if (tool) {
-      totalToolCost += (tool.costPerHour || 0) * y.hoursPerUnit;
-    }
+    if (tool) totalToolCost += (tool.costPerHour || 0) * y.hoursPerUnit;
   }
 
-  // 3. Calculate Labor Cost (Manual OR Derived from Crews OR Individuals)
   let derivedLaborCost = 0;
-  
   if (taskCrewYieldsIndex && crewsMap && laborCategoriesMap) {
       const crewYields = taskCrewYieldsIndex[task.id] || [];
-      
       for (const cy of crewYields) {
           const crew = crewsMap[cy.crewId];
           if (crew) {
-              // Calculate Crew Hourly Cost
               let crewHourlyCost = 0;
               crew.composition.forEach(member => {
                   const category = laborCategoriesMap[member.laborCategoryId];
                   if (category) {
-                      // Apply participation factor (default 100%)
                       const participation = (member.participation ?? 100) / 100;
                       crewHourlyCost += (calculateHourlyLaborCost(category) * member.count * participation);
                   }
               });
-
-              // Crew Unit Cost = (CrewHourly * WorkdayHours * Quantity) / DailyYield
               if ((task.dailyYield || 0) > 0) {
                   derivedLaborCost += (crewHourlyCost * workdayHours * cy.quantity) / task.dailyYield;
               }
@@ -70,13 +54,11 @@ export const calculateUnitPrice = (
       }
   }
 
-  // Calculate Individual Labor Cost
   if (taskLaborYieldsIndex && laborCategoriesMap) {
       const laborYields = taskLaborYieldsIndex[task.id] || [];
       for (const ly of laborYields) {
           const category = laborCategoriesMap[ly.laborCategoryId];
           if (category) {
-               // Cost = (Hourly * Workday * Quantity) / DailyYield
                if ((task.dailyYield || 0) > 0) {
                    derivedLaborCost += (calculateHourlyLaborCost(category) * workdayHours * ly.quantity) / task.dailyYield;
                }
@@ -84,15 +66,8 @@ export const calculateUnitPrice = (
       }
   }
 
-  // If crews/individuals are assigned, use derived cost plus any manual override, or default to manual if no derived
   const baseLabor = task.laborCost || 0;
-  // If derived cost exists, we assume it REPLACES the manual cost unless we want to add them. 
-  // Usually, if you define resources, the manual cost is ignored or zeroed. 
-  // But to be safe and support "Extra Manual Cost", we can sum them, OR prefer derived.
-  // Let's prefer Derived if > 0, else use Manual.
   const laborCost = derivedLaborCost > 0 ? derivedLaborCost : baseLabor;
-
-  // 4. Fixed / Additional Costs (Flete, Ayuda de Gremio, etc.)
   const fixedCost = task.fixedCost || 0;
 
   return {
@@ -105,71 +80,64 @@ export const calculateUnitPrice = (
   };
 };
 
-/**
- * Calculates duration in days based on Quantity and Daily Yield.
- * Updated to incorporate Method & Time Study concepts (Coscarella):
- * - Crews: "Frente de ataque"
- * - Efficiency (fv): "Valoración del ritmo" (1.0 normal, 1.2 fast, 0.8 slow)
- * - Allowances (Suplementos): Fatiga, Necesidades, Contingencias (increases time)
- * 
- * Formula: Standard Time = Normal Time * (1 + Supplements)
- * Where Normal Time depends on Yield * Efficiency.
- */
 export const calculateDuration = (
-    quantity: number, 
-    dailyYield: number, 
+    quantity: number,
+    dailyYield: number,
     crewsAssigned: number = 1,
-    efficiencyFactor: number = 1.0, // fv
-    allowancePercent: number = 0 // % Suplementos
+    efficiencyFactor: number = 1.0,
+    allowancePercent: number = 0
 ): number => {
   if (!dailyYield || dailyYield <= 0) return 1;
-  
-  // 1. Base Output (Producción Normal Diaria) = Rendimiento Base * Cuadrillas * Eficiencia
   const normalDailyOutput = dailyYield * Math.max(1, crewsAssigned) * efficiencyFactor;
-  
-  // 2. Adjusted Output considering Allowances (Suplementos reduces effective time/output)
-  // If Time increases by (1 + allowance), Output decreases by 1 / (1 + allowance)
   const effectiveDailyOutput = normalDailyOutput / (1 + (allowancePercent / 100));
-
   return Math.ceil(quantity / effectiveDailyOutput);
 };
 
 export const addDays = (date: string | Date, days: number): string => {
-  const result = new Date(date);
+  // Parsear como fecha local para evitar desfase UTC en zonas como Argentina (UTC-3)
+  const result = typeof date === 'string' ? new Date(date + 'T00:00:00') : new Date(date);
   result.setDate(result.getDate() + days);
-  return result.toISOString().split('T')[0];
+  return localDateString(result);
 };
 
 /**
- * Adds duration (in working days) to a start date, skipping non-working days and specific holidays.
+ * Convierte una Date a string YYYY-MM-DD usando la fecha LOCAL (no UTC).
+ * Evita el clásico bug de `toISOString()` que convierte a UTC antes de formatear.
+ */
+const localDateString = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+/**
+ * Agrega días hábiles a una fecha de inicio, salteando fines de semana y feriados.
  * @param startDate String YYYY-MM-DD
- * @param duration Number of working days
- * @param workingDays Array of allowed days (0=Sun, 1=Mon, ..., 6=Sat)
- * @param nonWorkingDates Array of Holiday objects or strings (backward compatibility)
+ * @param duration Días hábiles a agregar
+ * @param workingDays Días permitidos (0=Dom, 1=Lun, ..., 6=Sáb)
+ * @param nonWorkingDates Array de objetos Holiday o strings
  */
 export const addWorkingDays = (
-    startDate: string, 
-    duration: number, 
+    startDate: string,
+    duration: number,
     workingDays: number[] = [1,2,3,4,5],
     nonWorkingDates: Holiday[] = []
 ): string => {
-    let current = new Date(startDate);
-    // If duration is 1, it starts and ends on the same day (if valid).
-    // We need to add (duration - 1) days of work.
+    // Parsear como fecha local para que getDay() devuelva el día correcto en UTC-3
+    let current = new Date(startDate + 'T00:00:00');
     let daysToAdd = Math.max(0, duration - 1);
-    
-    // Extract strings for easy comparison
+
     const holidayStrings = new Set(nonWorkingDates.map(h => h.date));
 
     const isWorkingDay = (d: Date) => {
         const dayOfWeek = d.getDay();
-        const dateStr = d.toISOString().split('T')[0];
-        // Check weekly recurrence AND specific holidays
+        // Usar fecha local (no UTC) para evitar desfase de un día en zonas negativas
+        const dateStr = localDateString(d);
         return workingDays.includes(dayOfWeek) && !holidayStrings.has(dateStr);
     };
 
-    // Check if start date is valid, if not, move to next valid day first 
-    // (In strict CPM, start date usually matters, but here we push forward if start falls on holiday)
+    // Si la fecha de inicio cae en un día no hábil, avanzar al próximo hábil
     while (!isWorkingDay(current)) {
         current.setDate(current.getDate() + 1);
     }
@@ -180,13 +148,12 @@ export const addWorkingDays = (
             daysToAdd--;
         }
     }
-    return current.toISOString().split('T')[0];
+    return localDateString(current);
 };
 
 export const diffDays = (date1: string, date2: string): number => {
-  const d1 = new Date(date1);
-  const d2 = new Date(date2);
+  const d1 = new Date(date1 + 'T00:00:00');
+  const d2 = new Date(date2 + 'T00:00:00');
   const diffTime = Math.abs(d2.getTime() - d1.getTime());
-  // Add 1 to include the last day
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
 };

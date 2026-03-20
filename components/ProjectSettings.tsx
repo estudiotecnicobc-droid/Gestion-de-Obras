@@ -1,13 +1,17 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useERP } from '../context/ERPContext';
+import { useSave } from '../context/SaveContext';
+import { generateId } from '../utils/generateId';
 import { Building, MapPin, User, Calendar, Save, CreditCard, Briefcase, CheckCircle, Ruler, Component, Layers, ArrowDownCircle, BookOpen, Clock, CalendarX, Plus, Trash2, FolderOpen, Bookmark, DollarSign, Users, HardHat, UserPlus, Download, Upload, Edit, X } from 'lucide-react';
 import { CONSTRUCTION_SYSTEMS, STRUCTURE_TYPES, FOUNDATION_TYPES, PROJECT_TEMPLATES, DEFAULT_PRICING_CONFIG } from '../constants';
+import { projectsService } from '../services/projectsService';
 import { Holiday, ProjectLaborDefinition, ProjectCrewDefinition, CalendarPreset, Crew, CrewComposition } from '../types';
 
 type Tab = 'general' | 'financial' | 'calendar' | 'labor';
 
 export const ProjectSettings: React.FC = () => {
   const { project, updateProjectSettings, loadTemplate, calendarPresets, addCalendarPreset, applyCalendarPreset, deleteProject, laborCategories, crews, laborCategoriesMap, addCrew, updateCrew, removeCrew } = useERP();
+  const { registerSave, unregisterSave } = useSave();
   const [activeTab, setActiveTab] = useState<Tab>('general');
 
   // Crew Editing State
@@ -77,24 +81,31 @@ export const ProjectSettings: React.FC = () => {
       }
   }, [project]);
 
-  const handleSave = () => {
-      updateProjectSettings({
+  const handleSave = useCallback(async () => {
+      const updates = {
           ...formData,
           surface: parseFloat(formData.surface) || 0,
           pricing: pricingData,
           workingDays,
           nonWorkingDates,
           laborForce,
-          assignedCrews
-      });
-      // Simple feedback
+          assignedCrews,
+      };
+      updateProjectSettings(updates);                            // optimista: local state + fire-and-forget Supabase
+      await projectsService.update(project.id, updates);        // awaitable: propaga error real al botón global
+      // Feedback para el botón interno de la vista
       const btn = document.getElementById('save-btn');
-      if(btn) {
-          const originalText = btn.innerText;
+      if (btn) {
+          const orig = btn.innerText;
           btn.innerText = 'Guardado!';
-          setTimeout(() => btn.innerText = originalText, 2000);
+          setTimeout(() => { btn.innerText = orig; }, 2000);
       }
-  };
+  }, [formData, pricingData, workingDays, nonWorkingDates, laborForce, assignedCrews, updateProjectSettings, project.id]);
+
+  useEffect(() => {
+      registerSave(handleSave);
+      return () => unregisterSave();
+  }, [handleSave, registerSave, unregisterSave]);
 
   // --- Calendar Logic ---
   const toggleWorkingDay = (dayIndex: number) => {
@@ -138,7 +149,7 @@ export const ProjectSettings: React.FC = () => {
       if (!name) return;
 
       const newPreset: CalendarPreset = {
-          id: crypto.randomUUID(),
+          id: generateId(),
           name,
           workdayHours: formData.workdayHours,
           workdayStartTime: formData.workdayStartTime,
@@ -240,7 +251,7 @@ export const ProjectSettings: React.FC = () => {
       } else {
           addCrew({
               ...editingCrew as Crew,
-              id: `crew_${crypto.randomUUID()}`,
+              id: `crew_${generateId()}`,
               composition: editingCrew.composition || []
           });
       }

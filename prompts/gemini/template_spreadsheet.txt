@@ -1,0 +1,62 @@
+## Contexto
+Sistema ERP de gestión de obras de construcción.
+Necesito procesar una planilla para importar datos al sistema.
+
+---
+
+## Planilla de entrada
+
+Formato: [Excel / CSV / Google Sheets]
+Columnas disponibles: [listar columnas tal como aparecen en la planilla]
+
+Ejemplo de fila:
+| Col A | Col B | Col C | ... |
+|-------|-------|-------|-----|
+| valor | valor | valor | ... |
+
+---
+
+## Objetivo de la transformación
+
+Convertir las filas de la planilla al siguiente formato JSON para importar al sistema:
+
+```json
+[
+  {
+    "name": "string",
+    "unit": "string",
+    "unitPrice": 0,
+    "category": "string"
+  }
+]
+```
+
+---
+
+## Reglas de transformación
+
+1. Columna [X] → campo `name`: limpiar espacios, capitalizar primera letra
+2. Columna [Y] → campo `unit`: normalizar a valores: kg / m2 / m3 / ml / gl / u / hs
+3. Columna [Z] → campo `unitPrice`: convertir a número decimal, ignorar símbolo $, usar punto como decimal
+4. [Regla adicional si aplica]
+
+---
+
+## Casos especiales
+
+- Si la columna [X] está vacía → omitir la fila
+- Si el precio es 0 o negativo → marcar con `"flagged": true`
+- Duplicados por nombre → conservar el de mayor precio
+
+---
+
+## Output esperado
+
+Un array JSON válido, listo para pegar en la consola del sistema o usar en un script de importación.
+Sin comentarios, sin markdown, solo el JSON.
+
+---
+
+## Planilla adjunta
+
+[Pegar aquí el contenido de la planilla o adjuntar el archivo]

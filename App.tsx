@@ -19,7 +19,9 @@ import { MeasurementSheetComponent } from './components/MeasurementSheet';
 import { QualityControl } from './components/QualityControl';
 import { ProjectHub } from './components/ProjectHub';
 import { APUBuilder } from './components/APUBuilder';
+import { InvitationAccept } from './components/InvitationAccept';
 import { Role } from './types';
+import { SaveProvider } from './context/SaveContext';
 
 // Route Protection Component (Middleware Simulation)
 const ProtectedRoute: React.FC<{ 
@@ -41,13 +43,44 @@ const ProtectedRoute: React.FC<{
 };
 
 const AppContent = () => {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const { activeProjectId } = useERP();
   const [activeTab, setActiveTab] = useState('dashboard');
 
+  // Leer token de invitación de la URL al montar y limpiarla inmediatamente
+  const [inviteToken, setInviteToken] = useState<string | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get('invite');
+    if (t) window.history.replaceState({}, '', window.location.pathname);
+    return t;
+  });
+
+  // STATE 0: Resolving Supabase session
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <p className="text-slate-400 text-sm">Cargando sesión…</p>
+        </div>
+      </div>
+    );
+  }
+
   // STATE 1: Unauthenticated
   if (!user) {
-    return <Login />;
+    return <Login hasInvite={!!inviteToken} />;
+  }
+
+  // STATE 1.5: Pending invitation acceptance
+  if (inviteToken) {
+    return (
+      <InvitationAccept
+        token={inviteToken}
+        onComplete={() => setInviteToken(null)}
+        onSkip={() => setInviteToken(null)}
+      />
+    );
   }
 
   // STATE 2: Authenticated but No Project Selected -> HUB
@@ -101,7 +134,9 @@ const App = () => {
   return (
     <AuthProvider>
       <ERPProvider>
-        <AppContent />
+        <SaveProvider>
+          <AppContent />
+        </SaveProvider>
       </ERPProvider>
     </AuthProvider>
   );

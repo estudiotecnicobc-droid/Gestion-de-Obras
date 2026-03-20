@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { 
   Calculator, Hammer, Package, Save, RefreshCcw, 
   Info, DollarSign, ChevronRight, BookOpen, AlertCircle, Trash2, Plus, X, PenTool, Wrench, Users, ArrowRightLeft
@@ -7,6 +7,8 @@ import {
 import { useERP } from '../context/ERPContext';
 import { Task, TaskYield, TaskToolYield, TaskCrewYield, TaskLaborYield, StandardYields } from '../types';
 import { calculateUnitPrice } from '../services/calculationService';
+import { masterTasksService } from '../services/masterTasksSupabaseService';
+import { useSave } from '../context/SaveContext';
 
 interface APUBuilderProps {
     taskId?: string; // If provided, opens in edit mode for this task
@@ -22,7 +24,9 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
       materialsMap, toolsMap, crewsMap, laborCategoriesMap, project
   } = useERP(); 
   
+  const { registerSave, unregisterSave } = useSave();
   const [activeTab, setActiveTab] = useState<TabType>('general');
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle');
 
   // --- LOCAL STATE (DRAFT) ---
   const [currentTask, setCurrentTask] = useState<Task | null>(null);
@@ -41,16 +45,71 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
 
   // --- INITIALIZATION ---
   useEffect(() => {
-      if (taskId) {
-          const t = tasks.find(x => x.id === taskId);
-          if (t) {
-              setCurrentTask({ ...t });
-              setLocalMaterials(yieldsIndex[taskId] || []);
-              setLocalTools(toolYieldsIndex[taskId] || []);
-              setLocalCrews(taskCrewYieldsIndex[taskId] || []);
-              setLocalLabor(taskLaborYieldsIndex[taskId] || []);
-          }
-      }
+    if (!taskId) return;
+    const t = tasks.find(x => x.id === taskId);
+    if (!t) return;
+
+    setCurrentTask({ ...t });
+
+    const existingMaterials = yieldsIndex[taskId]         ?? [];
+    const existingTools     = toolYieldsIndex[taskId]     ?? [];
+    const existingLabor     = taskLaborYieldsIndex[taskId] ?? [];
+
+    const hasOwnYields = existingMaterials.length > 0 || existingTools.length > 0 || existingLabor.length > 0;
+
+    if (hasOwnYields || !t.masterTaskId) {
+      // Caso 1: yields propios → usarlos / Caso 3: sin masterTaskId → vacío
+      setLocalMaterials(existingMaterials);
+      setLocalTools(existingTools);
+      setLocalCrews(taskCrewYieldsIndex[taskId] ?? []);
+      setLocalLabor(existingLabor);
+      return;
+    }
+
+    // Caso 2: sin yields propios + tiene masterTaskId → pre-poblar desde MasterTask (draft, sin auto-save)
+    setLocalCrews(taskCrewYieldsIndex[taskId] ?? []);
+
+    masterTasksService.getById(t.masterTaskId).then(mt => {
+      if (!mt) return;
+
+      const nameToMaterial = new Map(materials.map(m => [m.name.toLowerCase().trim(), m]));
+
+      const preYields: TaskYield[] = mt.materials
+        .map(mtm => {
+          const mat = nameToMaterial.get(mtm.materialName.toLowerCase().trim());
+          if (!mat) return null;
+          return {
+            taskId: t.id,
+            materialId: mat.id,
+            quantity: mtm.quantity,
+            wastePercent: mtm.wastePercent,
+            organizationId: project.organizationId,
+          };
+        })
+        .filter((y): y is TaskYield => y !== null);
+
+      const preLabor: TaskLaborYield[] = mt.labor
+        .filter(l => !!laborCategoriesMap[l.laborCategoryId])
+        .map(l => ({
+          taskId: t.id,
+          laborCategoryId: l.laborCategoryId,
+          quantity: l.quantity,
+          organizationId: project.organizationId,
+        }));
+
+      const preTools: TaskToolYield[] = mt.equipment
+        .filter(e => !!toolsMap[e.toolId])
+        .map(e => ({
+          taskId: t.id,
+          toolId: e.toolId,
+          hoursPerUnit: e.hoursPerUnit,
+          organizationId: project.organizationId,
+        }));
+
+      setLocalMaterials(preYields);
+      setLocalLabor(preLabor);
+      setLocalTools(preTools);
+    });
   }, [taskId, tasks]);
 
   // --- DYNAMIC CALCULATIONS ---
@@ -146,21 +205,57 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
 
   // --- HANDLERS ---
 
-  const handleSave = () => {
+  const handleSave = async () => {
       if (!currentTask) return;
-      
-      updateTaskMaster(currentTask.id, {
-          ...currentTask,
-          // Calculate Labor Cost from Crews/Individuals if present to keep consistency
-          laborCost: (localCrews.length > 0 || localLabor.length > 0) ? analysis.laborCost : currentTask.laborCost,
-          materialsYield: localMaterials,
-          equipmentYield: localTools,
-          laborYield: localCrews,
-          laborIndividualYield: localLabor
-      });
-
-      if (onClose) onClose();
+      setSaveStatus('saving');
+      try {
+          await updateTaskMaster(currentTask.id, {
+              ...currentTask,
+              laborCost: (localCrews.length > 0 || localLabor.length > 0) ? analysis.laborCost : currentTask.laborCost,
+              materialsYield: localMaterials,
+              equipmentYield: localTools,
+              laborYield: localCrews,
+              laborIndividualYield: localLabor
+          });
+          setSaveStatus('ok');
+          setTimeout(() => { if (onClose) onClose(); }, 900);
+      } catch (err) {
+          console.error('[APUBuilder.handleSave]', err);
+          setSaveStatus('error');
+          setTimeout(() => setSaveStatus('idle'), 2500);
+      }
   };
+
+  // Save handler para el botón global — igual que handleSave pero sin onClose y con re-throw
+  const saveForContext = useCallback(async () => {
+      if (!currentTask) return;
+      setSaveStatus('saving');
+      try {
+          await updateTaskMaster(currentTask.id, {
+              ...currentTask,
+              laborCost: (localCrews.length > 0 || localLabor.length > 0) ? analysis.laborCost : currentTask.laborCost,
+              materialsYield: localMaterials,
+              equipmentYield: localTools,
+              laborYield: localCrews,
+              laborIndividualYield: localLabor,
+          });
+          setSaveStatus('ok');
+          setTimeout(() => setSaveStatus('idle'), 2000);
+      } catch (err) {
+          setSaveStatus('error');
+          setTimeout(() => setSaveStatus('idle'), 2500);
+          throw err;
+      }
+  }, [currentTask, localMaterials, localTools, localCrews, localLabor, analysis.laborCost, updateTaskMaster]);
+
+  useEffect(() => {
+      if (currentTask) {
+          registerSave(saveForContext);
+      } else {
+          unregisterSave();
+      }
+      return () => unregisterSave();
+  }, [currentTask, saveForContext, registerSave, unregisterSave]);
 
   // Update Daily Yield based on Crew Size or HH change
   // Formula: DailyYield = (CrewHours) / HH_per_Unit
@@ -215,11 +310,21 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                 <div className="text-[10px] uppercase font-bold text-slate-400">Costo Unitario</div>
                 <div className="text-lg font-mono font-bold text-slate-800">${analysis.totalUnitCost.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
             </div>
-            <button 
+            <button
                 onClick={handleSave}
-                className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2 rounded-lg font-bold text-sm hover:bg-blue-700 transition-colors shadow-md shadow-blue-200"
+                disabled={saveStatus === 'saving' || saveStatus === 'ok'}
+                className={`flex items-center gap-2 px-6 py-2 rounded-lg font-bold text-sm transition-colors shadow-md disabled:opacity-70 disabled:cursor-not-allowed ${
+                    saveStatus === 'ok'      ? 'bg-green-500 text-white shadow-green-200 cursor-default' :
+                    saveStatus === 'error'   ? 'bg-red-500 text-white shadow-red-200' :
+                    saveStatus === 'saving'  ? 'bg-blue-400 text-white shadow-blue-200' :
+                    'bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200'
+                }`}
             >
-                <Save size={16} /> Guardar Ficha
+                <Save size={16} />
+                {saveStatus === 'ok'     ? 'Guardado ✓' :
+                 saveStatus === 'error'  ? 'Error al guardar' :
+                 saveStatus === 'saving' ? 'Guardando...' :
+                 'Guardar Ficha'}
             </button>
             <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-500"><X size={20} /></button>
         </div>
@@ -317,7 +422,7 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                                 <button 
                                     onClick={() => {
                                         if(!selectedMaterialId) return;
-                                        setLocalMaterials([...localMaterials, { taskId: currentTask.id, materialId: selectedMaterialId, quantity: 1, wastePercent: 5 }]);
+                                        setLocalMaterials([...localMaterials, { taskId: currentTask.id, materialId: selectedMaterialId, quantity: 1, wastePercent: 5, organizationId: project.organizationId }]);
                                         setSelectedMaterialId('');
                                     }} 
                                     className="bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700"
@@ -363,7 +468,7 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                                                         className={`w-20 text-right p-1.5 border rounded font-bold ${diff?.isDifferent ? 'border-orange-300 text-orange-700 bg-orange-50' : 'border-slate-300'}`}
                                                         value={m.quantity}
                                                         onChange={e => {
-                                                            const val = parseFloat(e.target.value);
+                                                            const val = parseFloat(e.target.value) || 0;
                                                             setLocalMaterials(prev => prev.map(im => im.materialId === m.materialId ? { ...im, quantity: val } : im));
                                                         }}
                                                     />
@@ -377,7 +482,7 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                                                         className="w-14 text-right p-1.5 border border-slate-300 rounded text-slate-600"
                                                         value={m.wastePercent || 0}
                                                         onChange={e => {
-                                                            const val = parseFloat(e.target.value);
+                                                            const val = parseFloat(e.target.value) || 0;
                                                             setLocalMaterials(prev => prev.map(im => im.materialId === m.materialId ? { ...im, wastePercent: val } : im));
                                                         }}
                                                     />
@@ -440,7 +545,7 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                                                         className="w-12 text-center p-1 border border-slate-300 rounded font-bold"
                                                         value={c.quantity}
                                                         onChange={e => {
-                                                            const val = parseFloat(e.target.value);
+                                                            const val = parseFloat(e.target.value) || 1;
                                                             const newCrews = localCrews.map(lc => lc.crewId === c.crewId ? { ...lc, quantity: val } : lc);
                                                             setLocalCrews(newCrews);
                                                         }}
@@ -467,7 +572,7 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                                                         className="w-12 text-center p-1 border border-blue-200 rounded font-bold text-blue-700"
                                                         value={l.quantity}
                                                         onChange={e => {
-                                                            const val = parseFloat(e.target.value);
+                                                            const val = parseFloat(e.target.value) || 1;
                                                             setLocalLabor(prev => prev.map(il => il.laborCategoryId === l.laborCategoryId ? { ...il, quantity: val } : il));
                                                         }}
                                                     />
@@ -513,7 +618,7 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                                     <button 
                                         onClick={() => {
                                             if(!selectedLaborId) return;
-                                            setLocalLabor([...localLabor, { taskId: currentTask.id, laborCategoryId: selectedLaborId, quantity: 1 }]);
+                                            setLocalLabor([...localLabor, { taskId: currentTask.id, laborCategoryId: selectedLaborId, quantity: 1, organizationId: project.organizationId }]);
                                             setSelectedLaborId('');
                                         }}
                                         className="bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700"
@@ -537,7 +642,7 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                                             type="number"
                                             className="flex-1 p-2 border border-slate-300 rounded font-bold text-lg text-slate-800"
                                             value={currentTask.yieldHH || 0}
-                                            onChange={e => recalculateYield(1, parseFloat(e.target.value))}
+                                            onChange={e => { const v = parseFloat(e.target.value); if (v > 0) recalculateYield(1, v); }}
                                         />
                                         <span className="text-sm font-bold text-slate-500">hh/{currentTask.unit}</span>
                                     </div>
@@ -574,7 +679,7 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                                 <button 
                                     onClick={() => {
                                         if(!selectedToolId) return;
-                                        setLocalTools([...localTools, { taskId: currentTask.id, toolId: selectedToolId, hoursPerUnit: 1 }]);
+                                        setLocalTools([...localTools, { taskId: currentTask.id, toolId: selectedToolId, hoursPerUnit: 1, organizationId: project.organizationId }]);
                                         setSelectedToolId('');
                                     }}
                                     className="bg-purple-600 text-white p-2 rounded-lg hover:bg-purple-700"
@@ -605,7 +710,7 @@ export const APUBuilder: React.FC<APUBuilderProps> = ({ taskId, onClose }) => {
                                                     type="number"
                                                     className="w-16 text-right p-1 border border-slate-300 rounded"
                                                     value={t.hoursPerUnit}
-                                                    onChange={e => setLocalTools(prev => prev.map(it => it.toolId === t.toolId ? { ...it, hoursPerUnit: parseFloat(e.target.value) } : it))}
+                                                    onChange={e => setLocalTools(prev => prev.map(it => it.toolId === t.toolId ? { ...it, hoursPerUnit: parseFloat(e.target.value) || 0 } : it))}
                                                 />
                                             </td>
                                             <td className="p-3 text-right font-mono text-slate-500">${tool?.costPerHour}</td>

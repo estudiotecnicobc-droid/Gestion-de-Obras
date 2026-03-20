@@ -1,0 +1,61 @@
+{
+  "_comment": "Valores de MUESTRA para testing. Reemplazar con valores reales de publicaciones INDEC/UOCRA/CAC.",
+  "_source": "Basado en datos de referencia nov2025-mar2026 (escala normalizada)",
+  "values": [
+    { "index_code": "CAC",     "year": 2025, "month": 10, "value": 4980.00 },
+    { "index_code": "CAC",     "year": 2025, "month": 11, "value": 5200.00 },
+    { "index_code": "CAC",     "year": 2025, "month": 12, "value": 5450.00 },
+    { "index_code": "CAC",     "year": 2026, "month":  1, "value": 5720.00 },
+    { "index_code": "CAC",     "year": 2026, "month":  2, "value": 5980.00 },
+    { "index_code": "CAC",     "year": 2026, "month":  3, "value": 6190.00 },
+
+    { "index_code": "CAC-MAT", "year": 2025, "month": 10, "value": 1180.00 },
+    { "index_code": "CAC-MAT", "year": 2025, "month": 11, "value": 1250.00 },
+    { "index_code": "CAC-MAT", "year": 2025, "month": 12, "value": 1300.00 },
+    { "index_code": "CAC-MAT", "year": 2026, "month":  1, "value": 1380.00 },
+    { "index_code": "CAC-MAT", "year": 2026, "month":  2, "value": 1450.00 },
+    { "index_code": "CAC-MAT", "year": 2026, "month":  3, "value": 1498.60 },
+
+    { "index_code": "CAC-MO",  "year": 2025, "month": 10, "value":  95.00 },
+    { "index_code": "CAC-MO",  "year": 2025, "month": 11, "value": 100.00 },
+    { "index_code": "CAC-MO",  "year": 2025, "month": 12, "value": 105.00 },
+    { "index_code": "CAC-MO",  "year": 2026, "month":  1, "value": 110.00 },
+    { "index_code": "CAC-MO",  "year": 2026, "month":  2, "value": 115.00 },
+    { "index_code": "CAC-MO",  "year": 2026, "month":  3, "value": 118.50 },
+
+    { "index_code": "CAC-EQ",  "year": 2025, "month": 10, "value": 3850.00 },
+    { "index_code": "CAC-EQ",  "year": 2025, "month": 11, "value": 4050.00 },
+    { "index_code": "CAC-EQ",  "year": 2025, "month": 12, "value": 4200.00 },
+    { "index_code": "CAC-EQ",  "year": 2026, "month":  1, "value": 4420.00 },
+    { "index_code": "CAC-EQ",  "year": 2026, "month":  2, "value": 4610.00 },
+    { "index_code": "CAC-EQ",  "year": 2026, "month":  3, "value": 4775.00 },
+
+    { "index_code": "UOCRA",     "year": 2025, "month": 10, "value":  95.00 },
+    { "index_code": "UOCRA",     "year": 2025, "month": 11, "value": 100.00 },
+    { "index_code": "UOCRA",     "year": 2025, "month": 12, "value": 105.00 },
+    { "index_code": "UOCRA",     "year": 2026, "month":  1, "value": 110.00 },
+    { "index_code": "UOCRA",     "year": 2026, "month":  2, "value": 115.00 },
+    { "index_code": "UOCRA",     "year": 2026, "month":  3, "value": 118.50 },
+
+    { "index_code": "UOCRA-AYU", "year": 2025, "month": 10, "value":  78.00 },
+    { "index_code": "UOCRA-AYU", "year": 2025, "month": 11, "value":  82.00 },
+    { "index_code": "UOCRA-AYU", "year": 2025, "month": 12, "value":  86.00 },
+    { "index_code": "UOCRA-AYU", "year": 2026, "month":  1, "value":  90.00 },
+    { "index_code": "UOCRA-AYU", "year": 2026, "month":  2, "value":  94.00 },
+    { "index_code": "UOCRA-AYU", "year": 2026, "month":  3, "value":  97.00 },
+
+    { "index_code": "IPC",     "year": 2025, "month": 10, "value": 1420.00 },
+    { "index_code": "IPC",     "year": 2025, "month": 11, "value": 1480.00 },
+    { "index_code": "IPC",     "year": 2025, "month": 12, "value": 1550.00 },
+    { "index_code": "IPC",     "year": 2026, "month":  1, "value": 1620.00 },
+    { "index_code": "IPC",     "year": 2026, "month":  2, "value": 1690.00 },
+    { "index_code": "IPC",     "year": 2026, "month":  3, "value": 1748.00 },
+
+    { "index_code": "ICC",     "year": 2025, "month": 10, "value": 5100.00 },
+    { "index_code": "ICC",     "year": 2025, "month": 11, "value": 5350.00 },
+    { "index_code": "ICC",     "year": 2025, "month": 12, "value": 5600.00 },
+    { "index_code": "ICC",     "year": 2026, "month":  1, "value": 5850.00 },
+    { "index_code": "ICC",     "year": 2026, "month":  2, "value": 6050.00 },
+    { "index_code": "ICC",     "year": 2026, "month":  3, "value": 6260.00 }
+  ]
+}

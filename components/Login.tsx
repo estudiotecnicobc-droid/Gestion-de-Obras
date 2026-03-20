@@ -1,99 +1,215 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { HardHat, Shield, Users, Hammer, Eye } from 'lucide-react';
-import { Role } from '../types';
+import { HardHat, LogIn, UserPlus, AlertTriangle, Loader2, Building2 } from 'lucide-react';
 
-export const Login: React.FC = () => {
-  const { login } = useAuth();
-  const [selectedOrg, setSelectedOrg] = useState('org_a');
+type Mode = 'signin' | 'signup';
 
-  const handleLogin = (role: Role) => {
-    login(role, selectedOrg);
+interface Props {
+  hasInvite?: boolean;
+}
+
+export const Login: React.FC<Props> = ({ hasInvite = false }) => {
+  const { signIn, signUp } = useAuth();
+
+  const [mode, setMode] = useState<Mode>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [orgName, setOrgName] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const reset = () => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    reset();
+
+    if (!email.trim() || !password.trim()) {
+      setErrorMsg('Email y contraseña son obligatorios.');
+      return;
+    }
+    if (mode === 'signup' && !hasInvite && !orgName.trim()) {
+      setErrorMsg('El nombre de la empresa es obligatorio para registrarte.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (mode === 'signin') {
+        const { error } = await signIn(email.trim(), password);
+        if (error) setErrorMsg(error);
+      } else {
+        const resolvedOrgName = hasInvite ? 'Mi organización' : orgName.trim();
+        const { error } = await signUp(email.trim(), password, fullName.trim(), resolvedOrgName);
+        if (error) {
+          setErrorMsg(error);
+        } else {
+          setSuccessMsg(
+            'Cuenta creada. Revisá tu email para confirmar tu cuenta antes de ingresar.',
+          );
+        }
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const switchMode = (m: Mode) => {
+    setMode(m);
+    reset();
   };
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-2xl overflow-hidden">
+
+        {/* Header */}
         <div className="p-8 text-center bg-slate-50 border-b border-slate-100">
           <div className="mx-auto bg-blue-600 w-16 h-16 rounded-xl flex items-center justify-center shadow-lg shadow-blue-200 mb-4">
             <HardHat size={32} className="text-white" />
           </div>
           <h1 className="text-2xl font-black text-slate-800">Construsoft ERP</h1>
-          <p className="text-slate-500 text-sm mt-1">Acceso Seguro Multitenant</p>
+          <p className="text-slate-500 text-sm mt-1">Gestión de Obras Profesional</p>
         </div>
 
-        <div className="p-8 space-y-6">
+        {/* Toggle signin / signup */}
+        <div className="flex border-b border-slate-100">
+          <button
+            type="button"
+            onClick={() => switchMode('signin')}
+            className={`flex-1 py-3 text-sm font-bold transition-colors ${mode === 'signin' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
+          >
+            <span className="flex items-center justify-center gap-1.5">
+              <LogIn size={15} /> Ingresar
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMode('signup')}
+            className={`flex-1 py-3 text-sm font-bold transition-colors ${mode === 'signup' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
+          >
+            <span className="flex items-center justify-center gap-1.5">
+              <UserPlus size={15} /> Registrarse
+            </span>
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="p-8 space-y-4">
+
+          {/* Banner invitación */}
+          {hasInvite && (
+            <div className="flex items-start gap-2.5 p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
+              <Building2 size={14} className="mt-0.5 flex-shrink-0" />
+              <span>Fuiste invitado a una organización. Ingresá o creá una cuenta para aceptar la invitación.</span>
+            </div>
+          )}
+
+          {/* Mensajes */}
+          {errorMsg && (
+            <div className="flex items-start gap-2.5 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+              <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+              {errorMsg}
+            </div>
+          )}
+          {successMsg && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700">
+              {successMsg}
+            </div>
+          )}
+
+          {/* Nombre completo (solo signup) */}
+          {mode === 'signup' && (
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+                Nombre completo
+              </label>
+              <input
+                type="text"
+                value={fullName}
+                onChange={e => setFullName(e.target.value)}
+                placeholder="Juan García"
+                className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                autoComplete="name"
+              />
+            </div>
+          )}
+
+          {/* Email */}
           <div>
-            <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Seleccionar Empresa (Tenant)</label>
-            <select 
-              className="w-full p-3 border border-slate-200 rounded-lg bg-slate-50 font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={selectedOrg}
-              onChange={(e) => setSelectedOrg(e.target.value)}
-            >
-              <option value="org_a">Constructora A (Empresa Principal)</option>
-              <option value="org_b">Constructora B (Sucursal Norte)</option>
-            </select>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="usuario@empresa.com"
+              required
+              className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              autoComplete="email"
+            />
           </div>
 
-          <div className="space-y-3">
-            <p className="text-xs text-center font-bold text-slate-400 uppercase">Seleccione un Rol para Ingresar</p>
-            
-            <button 
-              onClick={() => handleLogin('admin')}
-              className="w-full p-4 rounded-xl border border-slate-200 hover:border-blue-500 hover:bg-blue-50 transition-all flex items-center gap-4 group"
-            >
-              <div className="p-2 bg-slate-100 rounded-lg group-hover:bg-blue-200 text-slate-600 group-hover:text-blue-700">
-                <Shield size={20} />
-              </div>
-              <div className="text-left">
-                <div className="font-bold text-slate-800">Administrador</div>
-                <div className="text-xs text-slate-500">Acceso total al sistema</div>
-              </div>
-            </button>
-
-            <button 
-              onClick={() => handleLogin('project_manager')}
-              className="w-full p-4 rounded-xl border border-slate-200 hover:border-purple-500 hover:bg-purple-50 transition-all flex items-center gap-4 group"
-            >
-              <div className="p-2 bg-slate-100 rounded-lg group-hover:bg-purple-200 text-slate-600 group-hover:text-purple-700">
-                <Hammer size={20} />
-              </div>
-              <div className="text-left">
-                <div className="font-bold text-slate-800">Gerente de Proyecto</div>
-                <div className="text-xs text-slate-500">Gestión de proyectos y tareas</div>
-              </div>
-            </button>
-
-            <button 
-              onClick={() => handleLogin('worker')}
-              className="w-full p-4 rounded-xl border border-slate-200 hover:border-orange-500 hover:bg-orange-50 transition-all flex items-center gap-4 group"
-            >
-              <div className="p-2 bg-slate-100 rounded-lg group-hover:bg-orange-200 text-slate-600 group-hover:text-orange-700">
-                <Users size={20} />
-              </div>
-              <div className="text-left">
-                <div className="font-bold text-slate-800">Trabajador</div>
-                <div className="text-xs text-slate-500">Visualización y actualización de tareas</div>
-              </div>
-            </button>
-
-            <button 
-              onClick={() => handleLogin('client')}
-              className="w-full p-4 rounded-xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-all flex items-center gap-4 group"
-            >
-              <div className="p-2 bg-slate-100 rounded-lg group-hover:bg-emerald-200 text-slate-600 group-hover:text-emerald-700">
-                <Eye size={20} />
-              </div>
-              <div className="text-left">
-                <div className="font-bold text-slate-800">Cliente</div>
-                <div className="text-xs text-slate-500">Solo lectura de reportes</div>
-              </div>
-            </button>
+          {/* Contraseña */}
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+              Contraseña
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder={mode === 'signup' ? 'Mínimo 6 caracteres' : '••••••••'}
+              required
+              className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+            />
           </div>
-        </div>
-        
-        <div className="bg-slate-50 p-4 text-center border-t border-slate-100">
-          <p className="text-[10px] text-slate-400">Simulación de seguridad RBAC y Multitenant</p>
+
+          {/* Nombre empresa (solo signup sin invitación) */}
+          {mode === 'signup' && !hasInvite && (
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+                Nombre de tu empresa <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={orgName}
+                onChange={e => setOrgName(e.target.value)}
+                placeholder="Constructora González S.A."
+                className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                Se creará tu organización automáticamente. Podrás invitar colaboradores después.
+              </p>
+            </div>
+          )}
+
+          {/* Submit */}
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors shadow-sm shadow-blue-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {submitting
+              ? <><Loader2 size={16} className="animate-spin" /> Procesando…</>
+              : mode === 'signin'
+                ? <><LogIn size={16} /> Ingresar</>
+                : <><UserPlus size={16} /> Crear cuenta</>
+            }
+          </button>
+        </form>
+
+        <div className="bg-slate-50 px-8 py-4 border-t border-slate-100 text-center">
+          <p className="text-[10px] text-slate-400">
+            Acceso seguro con Supabase Auth · Multitenant
+          </p>
         </div>
       </div>
     </div>

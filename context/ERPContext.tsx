@@ -1,15 +1,23 @@
 
-import React, { createContext, useContext, useMemo, ReactNode, useEffect } from 'react';
-import { Material, Task, TaskYield, TaskToolYield, Tool, Project, BudgetItem, ImportResult, LaborCategory, ProjectTemplate, Snapshot, Reception, Subcontractor, Contract, Certification, CalendarPreset, ProjectDocument, MeasurementSheet, Crew, TaskCrewYield, TaskLaborYield, QualityProtocol, QualityInspection, NonConformity } from '../types';
-import { INITIAL_MATERIALS, INITIAL_TASKS, INITIAL_YIELDS, INITIAL_PROJECT, INITIAL_TOOLS, INITIAL_TOOL_YIELDS, INITIAL_LABOR_CATEGORIES, INITIAL_RUBROS, INITIAL_CALENDAR_PRESETS, INITIAL_CREWS, INITIAL_CREW_YIELDS, INITIAL_QUALITY_PROTOCOLS, RUBRO_PRESETS } from '../constants';
+import React, { createContext, useContext, useMemo, useState, ReactNode, useEffect } from 'react';
+import { Material, Task, TaskYield, TaskToolYield, Tool, Project, BudgetItem, ImportResult, LaborCategory, ProjectTemplate, Snapshot, Reception, Subcontractor, Contract, Certification, CalendarPreset, ProjectDocument, MeasurementSheet, Crew, TaskCrewYield, TaskLaborYield, QualityProtocol, QualityInspection, NonConformity, ProjectCertificate } from '../types';
+import { INITIAL_PROJECT, INITIAL_RUBROS, INITIAL_CALENDAR_PRESETS, INITIAL_QUALITY_PROTOCOLS, RUBRO_PRESETS, hydrateWithOrg } from '../constants';
 import { useAuth } from './AuthContext';
 import { usePersistentState } from '../hooks/usePersistentState';
+import { projectsService } from '../services/projectsService';
+import { tasksService } from '../services/tasksService';
+import { budgetItemsService } from '../services/budgetItemsService';
+import { materialsService } from '../services/materialsService';
+import { toolsService } from '../services/toolsService';
+import { laborCategoriesService } from '../services/laborCategoriesService';
+import { crewsService } from '../services/crewsService';
+import { generateId } from '../utils/generateId';
 
 interface MaterialStockStatus {
     material: Material;
-    budgeted: number; 
-    received: number; 
-    pending: number; 
+    budgeted: number;
+    received: number;
+    pending: number;
 }
 
 interface ERPContextType {
@@ -25,7 +33,7 @@ interface ERPContextType {
   crews: Crew[];
   taskCrewYields: TaskCrewYield[];
   taskLaborYields: TaskLaborYield[];
-  
+
   // Project Management
   project: Project; // The Active Project
   projects: Project[]; // All Projects for Org
@@ -34,7 +42,7 @@ interface ERPContextType {
   setActiveProject: (id: string) => void;
   exitProject: () => void; // NEW: Go back to Hub
   deleteProject: (id: string) => void;
-  saveProject: () => Promise<void>; 
+  saveProject: () => Promise<void>;
 
   snapshots: Snapshot[];
   receptions: Reception[];
@@ -44,7 +52,7 @@ interface ERPContextType {
   calendarPresets: CalendarPreset[];
   documents: ProjectDocument[];
   measurementSheets: MeasurementSheet[];
-  
+
   // Quality Management
   qualityProtocols: QualityProtocol[];
   qualityInspections: QualityInspection[];
@@ -56,21 +64,21 @@ interface ERPContextType {
   toolsMap: Record<string, Tool>;
   laborCategoriesMap: Record<string, LaborCategory>;
   crewsMap: Record<string, Crew>;
-  yieldsIndex: Record<string, TaskYield[]>; 
-  toolYieldsIndex: Record<string, TaskToolYield[]>; 
-  taskCrewYieldsIndex: Record<string, TaskCrewYield[]>; 
+  yieldsIndex: Record<string, TaskYield[]>;
+  toolYieldsIndex: Record<string, TaskToolYield[]>;
+  taskCrewYieldsIndex: Record<string, TaskCrewYield[]>;
   taskLaborYieldsIndex: Record<string, TaskLaborYield[]>;
-  
+
   // Actions
   addMaterial: (m: Material) => void;
   updateMaterial: (id: string, updates: Partial<Material>) => void;
   removeMaterial: (id: string) => void;
-  
-  addTask: (t: Task) => void;
+
+  addTask: (t: Task) => Promise<void>;
   updateTask: (id: string, updates: Partial<Task>) => void;
-  updateTaskMaster: (taskId: string, updates: Partial<Task>) => void; // NEW: Master Sync Function
+  updateTaskMaster: (taskId: string, updates: Partial<Task>) => Promise<void>;
   removeTask: (id: string) => void;
-  
+
   addTool: (t: Tool) => void;
   updateTool: (id: string, updates: Partial<Tool>) => void;
   removeTool: (id: string) => void;
@@ -89,10 +97,13 @@ interface ERPContextType {
   removeRubroPreset: (rubro: string, taskName: string) => void;
 
   updateProjectSettings: (p: Partial<Project>) => void;
-  addBudgetItem: (item: BudgetItem) => void;
+  budgetItemsLoading: boolean;
+  /** true una vez que allTasks terminó de cargar para la org activa */
+  tasksLoaded: boolean;
+  addBudgetItem: (item: BudgetItem) => Promise<void>;
   removeBudgetItem: (itemId: string) => void;
   updateBudgetItem: (itemId: string, updates: Partial<BudgetItem>) => void;
-  
+
   // Resource Actions
   addTaskYield: (yieldData: TaskYield) => void;
   removeTaskYield: (taskId: string, materialId: string) => void;
@@ -102,7 +113,7 @@ interface ERPContextType {
   removeTaskCrewYield: (taskId: string, crewId: string) => void;
   addTaskLaborYield: (laborYieldData: TaskLaborYield) => void;
   removeTaskLaborYield: (taskId: string, laborCategoryId: string) => void;
-  
+
   loadTemplate: (template: ProjectTemplate) => void;
   importData: (type: 'materials' | 'tasks' | 'tools' | 'labor', jsonData: string) => ImportResult;
   createSnapshot: (name: string, totalCost: number) => void;
@@ -128,7 +139,7 @@ interface ERPContextType {
   addDocument: (doc: ProjectDocument) => void;
   removeDocument: (id: string) => void;
   saveMeasurementSheet: (sheet: MeasurementSheet) => void;
-  syncMeasurementToBudget: (sheetId: string) => void; 
+  syncMeasurementToBudget: (sheetId: string) => void;
 
   // Quality Actions
   addQualityProtocol: (p: QualityProtocol) => void;
@@ -136,23 +147,41 @@ interface ERPContextType {
   addQualityInspection: (i: QualityInspection) => void;
   addNonConformity: (n: NonConformity) => void;
   updateNonConformity: (id: string, updates: Partial<NonConformity>) => void;
+
+  // Project Certificates (Certificados de Avance de Obra)
+  projectCertificates: ProjectCertificate[];
+  addProjectCertificate: (cert: ProjectCertificate) => void;
 }
 
 const ERPContext = createContext<ERPContextType | undefined>(undefined);
 
 export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { user } = useAuth();
-  const orgId = user?.organizationId || 'public'; 
+  const orgId = user?.organizationId ?? '';
 
-  // --- RAW DATA (Managed via custom hook for persistence) ---
-  const migrate = (data: any[]) => data.map((d: any) => ({...d, organizationId: d.organizationId || 'org_a'}));
+  // ─── SUPABASE-backed state ────────────────────────────────────────────────
+  // projects, tasks, budget_items, yields → se cargan desde Supabase.
+  // Las mutations actualizan el estado local de inmediato (optimistic)
+  // y sincronizan con Supabase en background (fire-and-forget).
 
-  const [allMaterials, setAllMaterials] = usePersistentState<Material[]>('erp_materials', migrate(INITIAL_MATERIALS));
-  const [allTasks, setAllTasks] = usePersistentState<Task[]>('erp_tasks', migrate(INITIAL_TASKS));
-  const [allTools, setAllTools] = usePersistentState<Tool[]>('erp_tools', migrate(INITIAL_TOOLS));
-  const [allLaborCategories, setAllLaborCategories] = usePersistentState<LaborCategory[]>('erp_labor_categories', migrate(INITIAL_LABOR_CATEGORIES));
-  const [allCrews, setAllCrews] = usePersistentState<Crew[]>('erp_crews', migrate(INITIAL_CREWS));
-  const [allProjects, setAllProjects] = usePersistentState<Project[]>('erp_projects', migrate([INITIAL_PROJECT]));
+  const [allProjects, setAllProjects] = useState<Project[]>([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false); // true después del primer fetch exitoso
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
+  const [allBudgetItems, setAllBudgetItems] = useState<BudgetItem[]>([]);
+  const [budgetItemsLoading, setBudgetItemsLoading] = useState(false);
+  const [tasksLoaded, setTasksLoaded] = useState(false);
+  const [yields, setYields] = useState<TaskYield[]>([]);
+  const [toolYields, setToolYields] = useState<TaskToolYield[]>([]);
+  const [taskLaborYields, setTaskLaborYields] = useState<TaskLaborYield[]>([]);
+
+  // ─── localStorage-backed state ────────────────────────────────────────────
+  // Resto de entidades: materials, tools, labor, crews, rubros, docs, etc.
+
+  // ── Supabase-backed (migradas en Fase 1) ──────────────────────────────────
+  const [allMaterials, setAllMaterials] = useState<Material[]>([]);
+  const [allTools, setAllTools] = useState<Tool[]>([]);
+  const [allLaborCategories, setAllLaborCategories] = useState<LaborCategory[]>([]);
+  const [allCrews, setAllCrews] = useState<Crew[]>([]);
   const [activeProjectId, setActiveProjectId] = usePersistentState<string | null>('erp_active_project_id', null);
 
   const [allSnapshots, setAllSnapshots] = usePersistentState<Snapshot[]>('erp_snapshots', []);
@@ -160,24 +189,186 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [allSubcontractors, setAllSubcontractors] = usePersistentState<Subcontractor[]>('erp_subcontractors', []);
   const [allContracts, setAllContracts] = usePersistentState<Contract[]>('erp_contracts', []);
   const [allCertifications, setAllCertifications] = usePersistentState<Certification[]>('erp_certifications', []);
-  
-  // Shared/Global Data
-  const [yields, setYields] = usePersistentState<TaskYield[]>('erp_yields', INITIAL_YIELDS);
-  const [toolYields, setToolYields] = usePersistentState<TaskToolYield[]>('erp_tool_yields', INITIAL_TOOL_YIELDS);
-  const [taskCrewYields, setTaskCrewYields] = usePersistentState<TaskCrewYield[]>('erp_crew_yields', INITIAL_CREW_YIELDS);
-  const [taskLaborYields, setTaskLaborYields] = usePersistentState<TaskLaborYield[]>('erp_labor_yields', []);
+
+  const [taskCrewYields, setTaskCrewYields] = useState<TaskCrewYield[]>([]);
   const [rubros, setRubros] = usePersistentState<string[]>('erp_rubros', INITIAL_RUBROS);
   const [rubroPresets, setRubroPresets] = usePersistentState<Record<string, Partial<Task>[]>>('erp_rubro_presets', RUBRO_PRESETS);
   const [calendarPresets, setCalendarPresets] = usePersistentState<CalendarPreset[]>('erp_calendar_presets', INITIAL_CALENDAR_PRESETS);
-  
-  // New Tables Data
+
   const [allDocuments, setAllDocuments] = usePersistentState<ProjectDocument[]>('erp_documents', []);
   const [allMeasurementSheets, setAllMeasurementSheets] = usePersistentState<MeasurementSheet[]>('erp_measurements', []);
-
-  // Quality Data
-  const [allQualityProtocols, setAllQualityProtocols] = usePersistentState<QualityProtocol[]>('erp_quality_protocols', migrate(INITIAL_QUALITY_PROTOCOLS));
+  const [allQualityProtocols, setAllQualityProtocols] = usePersistentState<QualityProtocol[]>('erp_quality_protocols', []);
   const [allQualityInspections, setAllQualityInspections] = usePersistentState<QualityInspection[]>('erp_quality_inspections', []);
   const [allNonConformities, setAllNonConformities] = usePersistentState<NonConformity[]>('erp_non_conformities', []);
+  const [allProjectCertificates, setAllProjectCertificates] = usePersistentState<ProjectCertificate[]>('erp_project_certificates', []);
+
+  // ─── SEEDING localStorage entities (crews, quality) ─────────────────────
+  // materials, tools, laborCategories ya no se siembran aquí — vienen de Supabase.
+  useEffect(() => {
+    if (!orgId) return;
+
+    function seedOrMigrate<T extends { organizationId: string }>(
+      prev: T[],
+      initialSeed: Omit<T, 'organizationId'>[]
+    ): T[] {
+      const hasOrgData = prev.some(x => x.organizationId === orgId);
+      if (hasOrgData) return prev;
+
+      const legacyItems = prev.filter(x => !x.organizationId || x.organizationId === '');
+      if (legacyItems.length > 0) {
+        console.info(`[ERP] Migrando ${legacyItems.length} items legacy sin organizationId → org '${orgId}'`);
+        return prev.map(x =>
+          (!x.organizationId || x.organizationId === '')
+            ? { ...x, organizationId: orgId }
+            : x
+        );
+      }
+
+      console.info(`[ERP] Sembrando datos iniciales para org '${orgId}'`);
+      return [...prev, ...hydrateWithOrg(initialSeed as T[], orgId)];
+    }
+
+    setAllQualityProtocols(prev => seedOrMigrate(prev, INITIAL_QUALITY_PROTOCOLS));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId]);
+
+  // ─── SUPABASE: cargar resources + projects + tasks + yields cuando cambia la org ─
+  useEffect(() => {
+    if (!orgId) {
+      setAllMaterials([]);
+      setAllTools([]);
+      setAllLaborCategories([]);
+      setAllCrews([]);
+      setAllProjects([]);
+      setProjectsLoaded(false);
+      setAllTasks([]);
+      setTasksLoaded(false);
+      setYields([]);
+      setToolYields([]);
+      setTaskLaborYields([]);
+      setTaskCrewYields([]);
+      return;
+    }
+
+    setProjectsLoaded(false);
+    setTasksLoaded(false);
+
+    const load = async () => {
+      // ── Fase 1: resources + crews + projects + tasks en paralelo ──────────
+      let fetchedMaterials: Material[] = [];
+      let fetchedTools: Tool[] = [];
+      let fetchedLaborCategories: LaborCategory[] = [];
+      let fetchedCrews: Crew[] = [];
+      let fetchedProjects: Project[] = [];
+      let fetchedTasks: Task[] = [];
+
+      try {
+        [
+          fetchedMaterials,
+          fetchedTools,
+          fetchedLaborCategories,
+          fetchedCrews,
+          fetchedProjects,
+          fetchedTasks,
+        ] = await Promise.all([
+          materialsService.listForOrg(orgId),
+          toolsService.listForOrg(orgId),
+          laborCategoriesService.listForOrg(orgId),
+          crewsService.listForOrg(orgId),
+          projectsService.list(orgId),
+          tasksService.listForOrg(orgId),
+        ]);
+      } catch (err: any) {
+        console.error('[ERP] Error cargando recursos/proyectos/tareas desde Supabase:', err?.message ?? err);
+        // Estado queda en [] — la app muestra vacío pero no crashea.
+        // projectsLoaded queda false para evitar validación prematura de activeProjectId.
+        setTasksLoaded(true); // desbloquear editor aunque no haya tareas, para no quedar en spinner eterno
+        return;
+      }
+
+      setAllMaterials(fetchedMaterials);
+      setAllTools(fetchedTools);
+      setAllLaborCategories(fetchedLaborCategories);
+      setAllCrews(fetchedCrews);
+      setAllProjects(fetchedProjects);
+      setProjectsLoaded(true); // marcar ANTES de que el useEffect de validación corra
+      setAllTasks(fetchedTasks);
+      setTasksLoaded(true); // tareas disponibles — BudgetEditor puede renderizar ítems
+
+      // ── Fase 2: yields + crew yields (dependen de fetchedTasks) ──────────
+      if (fetchedTasks.length > 0) {
+        const taskIds = fetchedTasks.map(t => t.id);
+        try {
+          const [{ yields: yd, laborYields: lyd, toolYields: tyd }, crewYields] =
+            await Promise.all([
+              tasksService.listYieldsForTasks(taskIds),
+              crewsService.listCrewYieldsForTasks(taskIds),
+            ]);
+          setYields(yd);
+          setTaskLaborYields(lyd);
+          setToolYields(tyd);
+          setTaskCrewYields(crewYields);
+        } catch (err: any) {
+          console.error('[ERP] Error cargando yields desde Supabase:', err?.message ?? err);
+          // Yields quedan en [] — tareas existen pero sin insumos/MO/equipos/cuadrillas.
+          setYields([]);
+          setTaskLaborYields([]);
+          setToolYields([]);
+          setTaskCrewYields([]);
+        }
+      } else {
+        setYields([]);
+        setTaskLaborYields([]);
+        setToolYields([]);
+        setTaskCrewYields([]);
+      }
+      // NOTA: la validación de activeProjectId se hace en el useEffect de abajo,
+      // fuera del async, para evitar stale closure y race conditions entre loads.
+    };
+
+    load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId]);
+
+  // ─── Validar activeProjectId DESPUÉS de que los projects carguen ──────────
+  // Separado del async load() para evitar que dos loads concurrentes se pisen.
+  useEffect(() => {
+    // Solo actuar cuando ya cargamos proyectos para esta org.
+    // Si projectsLoaded es false, no limpiar: puede ser una carga en curso.
+    if (!projectsLoaded || !activeProjectId) return;
+    const valid = allProjects.some(
+      p => p.id === activeProjectId && p.organizationId === orgId
+    );
+    if (!valid) {
+      console.info('[ERP] activeProjectId no pertenece a esta org, limpiando.');
+      setActiveProjectId(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectsLoaded, allProjects, orgId]);
+
+  // ─── SUPABASE: cargar budget_items cuando cambia el proyecto activo ────────
+  // IMPORTANTE: depende también de orgId para evitar que el effect dispare en
+  // mount con el activeProjectId stale de localStorage antes de que el usuario
+  // esté autenticado (llamada sin sesión → RLS bloquea → never reload on login).
+  useEffect(() => {
+    if (!activeProjectId || !orgId) {
+      setAllBudgetItems([]);
+      setBudgetItemsLoading(false);
+      return;
+    }
+    setBudgetItemsLoading(true);
+    setAllBudgetItems([]); // limpiar mientras carga
+    console.log(`[ERP:budgetItems] cargando para proyecto=${activeProjectId?.slice(0,8)} org=${orgId?.slice(0,8)}`);
+    budgetItemsService.listForProject(activeProjectId)
+      .then(items => {
+        console.log(`[ERP:budgetItems] setAllBudgetItems(${items.length} items)`);
+        setAllBudgetItems(items);
+      })
+      .catch(err => {
+        console.error('[ERP:budgetItems] fetch falló:', err);
+      })
+      .finally(() => setBudgetItemsLoading(false));
+  }, [activeProjectId, orgId]);
 
   // --- FILTERED DATA (MULTITENANT) ---
   const materials = useMemo(() => allMaterials.filter(x => x.organizationId === orgId), [allMaterials, orgId]);
@@ -185,21 +376,30 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const tools = useMemo(() => allTools.filter(x => x.organizationId === orgId), [allTools, orgId]);
   const laborCategories = useMemo(() => allLaborCategories.filter(x => x.organizationId === orgId), [allLaborCategories, orgId]);
   const crews = useMemo(() => allCrews.filter(x => x.organizationId === orgId), [allCrews, orgId]);
-  
+
   // --- PROJECT LOGIC ---
   const projects = useMemo(() => allProjects.filter(x => x.organizationId === orgId), [allProjects, orgId]);
-  
-  const project = useMemo(() => {
-      // Find active project or default to the first one, or a placeholder if none exist
-      // NOTE: Logic slightly changed to support ProjectSelector. If no activeProjectId is set, we might return a default but UI should handle 'null' ID.
-      return projects.find(p => p.id === activeProjectId) || projects[0] || { 
-          ...INITIAL_PROJECT, 
-          id: `new_${orgId}`, 
-          organizationId: orgId, 
-          name: 'Nuevo Proyecto', 
-          items: [] 
+
+  const rawProject = useMemo(() => {
+      return projects.find(p => p.id === activeProjectId) || projects[0] || {
+          ...INITIAL_PROJECT,
+          id: '__phantom__',
+          organizationId: '__no_org__',
+          name: 'Sin Proyecto',
+          items: []
       };
-  }, [projects, activeProjectId, orgId]);
+  }, [projects, activeProjectId]);
+
+  // Budget items del proyecto activo (ya filtrados por activeProjectId en el useEffect)
+  const currentBudgetItems = useMemo(() => {
+    const fromStore = allBudgetItems.filter(bi => bi.projectId === rawProject.id);
+    return fromStore.length > 0 ? fromStore : rawProject.items;
+  }, [allBudgetItems, rawProject.id, rawProject.items]);
+
+  const project = useMemo(() =>
+    ({ ...rawProject, items: currentBudgetItems }),
+    [rawProject, currentBudgetItems]
+  );
 
   const snapshots = useMemo(() => allSnapshots.filter(x => x.organizationId === orgId && x.projectId === project.id), [allSnapshots, orgId, project.id]);
   const receptions = useMemo(() => allReceptions.filter(x => x.organizationId === orgId), [allReceptions, orgId]);
@@ -208,10 +408,17 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const certifications = useMemo(() => allCertifications.filter(x => x.organizationId === orgId), [allCertifications, orgId]);
   const documents = useMemo(() => allDocuments.filter(x => x.organizationId === orgId && x.projectId === project.id), [allDocuments, orgId, project.id]);
   const measurementSheets = useMemo(() => allMeasurementSheets.filter(x => x.organizationId === orgId), [allMeasurementSheets, orgId]);
-  
+
   const qualityProtocols = useMemo(() => allQualityProtocols.filter(x => x.organizationId === orgId), [allQualityProtocols, orgId]);
   const qualityInspections = useMemo(() => allQualityInspections.filter(x => x.organizationId === orgId && x.projectId === project.id), [allQualityInspections, orgId, project.id]);
   const nonConformities = useMemo(() => allNonConformities.filter(x => x.organizationId === orgId && x.projectId === project.id), [allNonConformities, orgId, project.id]);
+
+  const projectCertificates = useMemo(() =>
+    allProjectCertificates
+      .filter(c => c.organizationId === orgId && c.projectId === project.id)
+      .sort((a, b) => a.number - b.number),
+    [allProjectCertificates, orgId, project.id]
+  );
 
   // --- OPTIMIZATION INDEXES ---
   const materialsMap = useMemo(() => {
@@ -273,72 +480,142 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // --- ACTIONS (Inject OrgId) ---
 
-  const addMaterial = (m: Material) => setAllMaterials(prev => [...prev, { ...m, organizationId: orgId }]);
-  const updateMaterial = (id: string, updates: Partial<Material>) => 
+  // ── Materials — optimistic + Supabase background sync ────────────────────
+
+  const addMaterial = (m: Material) => {
+    const enriched = { ...m, organizationId: orgId };
+    setAllMaterials(prev => [...prev, enriched]);
+    materialsService.create(enriched).catch(console.error);
+  };
+  const updateMaterial = (id: string, updates: Partial<Material>) => {
     setAllMaterials(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m));
-  const removeMaterial = (id: string) => setAllMaterials(prev => prev.filter(m => m.id !== id));
-
-  const addTask = (t: Task) => setAllTasks(prev => [...prev, { ...t, organizationId: orgId }]);
-  
-  const updateTask = (id: string, updates: Partial<Task>) => 
-    setAllTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-
-  // NEW: Master Sync Function
-  const updateTaskMaster = (taskId: string, updates: Partial<Task>) => {
-      // 1. Update basic task info
-      updateTask(taskId, updates);
-
-      // 2. Cascade Update Resources if present in 'updates'
-      // Materials Sync
-      if (updates.materialsYield) {
-          setYields(prev => {
-              const others = prev.filter(y => y.taskId !== taskId);
-              return [...others, ...updates.materialsYield!];
-          });
-      }
-
-      // Tools Sync
-      if (updates.equipmentYield) {
-          setToolYields(prev => {
-              const others = prev.filter(y => y.taskId !== taskId);
-              return [...others, ...updates.equipmentYield!];
-          });
-      }
-
-      // Crews/Labor Sync
-      if (updates.laborYield) {
-          setTaskCrewYields(prev => {
-              const others = prev.filter(y => y.taskId !== taskId);
-              return [...others, ...updates.laborYield!];
-          });
-      }
-
-      // Individual Labor Sync
-      if (updates.laborIndividualYield) {
-          setTaskLaborYields(prev => {
-              const others = prev.filter(y => y.taskId !== taskId);
-              return [...others, ...updates.laborIndividualYield!];
-          });
-      }
+    materialsService.update(id, updates).catch(console.error);
+  };
+  const removeMaterial = (id: string) => {
+    setAllMaterials(prev => prev.filter(m => m.id !== id));
+    materialsService.remove(id).catch(console.error);
   };
 
-  const removeTask = (id: string) => setAllTasks(prev => prev.filter(t => t.id !== id));
+  // ── Tasks — optimistic + Supabase background sync ─────────────────────────
 
-  const addTool = (t: Tool) => setAllTools(prev => [...prev, { ...t, organizationId: orgId }]);
-  const updateTool = (id: string, updates: Partial<Tool>) => 
+  const addTask = (t: Task): Promise<void> => {
+    const enriched = { ...t, organizationId: orgId };
+    setAllTasks(prev => [...prev, enriched]);
+    // Devuelve la Promise para que los callers puedan secuenciar inserts dependientes (FK).
+    // Los callers que no necesitan esperar pueden ignorar el valor devuelto.
+    return tasksService.create(enriched);
+  };
+
+  const updateTask = (id: string, updates: Partial<Task>) => {
+    setAllTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+    tasksService.update(id, updates).catch(console.error);
+  };
+
+  const updateTaskMaster = async (taskId: string, updates: Partial<Task>): Promise<void> => {
+    // 1. Update basic task info
+    updateTask(taskId, updates);
+
+    // 2. Cascade Update Resources if present in 'updates'
+    if (updates.materialsYield) {
+      setYields(prev => {
+        const others = prev.filter(y => y.taskId !== taskId);
+        return [...others, ...updates.materialsYield!];
+      });
+    }
+    if (updates.equipmentYield) {
+      setToolYields(prev => {
+        const others = prev.filter(y => y.taskId !== taskId);
+        return [...others, ...updates.equipmentYield!];
+      });
+    }
+    if (updates.laborYield) {
+      setTaskCrewYields(prev => {
+        const others = prev.filter(y => y.taskId !== taskId);
+        return [...others, ...updates.laborYield!];
+      });
+    }
+    if (updates.laborIndividualYield) {
+      setTaskLaborYields(prev => {
+        const others = prev.filter(y => y.taskId !== taskId);
+        return [...others, ...updates.laborIndividualYield!];
+      });
+    }
+
+    // 3. Sync Supabase yields — awaited para feedback real
+    const promises: Promise<void>[] = [];
+    if (
+      updates.materialsYield !== undefined ||
+      updates.equipmentYield !== undefined ||
+      updates.laborIndividualYield !== undefined
+    ) {
+      promises.push(
+        tasksService.replaceAllYields(
+          taskId,
+          updates.materialsYield       ?? yields.filter(y => y.taskId === taskId),
+          updates.laborIndividualYield ?? taskLaborYields.filter(y => y.taskId === taskId),
+          updates.equipmentYield       ?? toolYields.filter(y => y.taskId === taskId),
+        )
+      );
+    }
+    if (updates.laborYield !== undefined) {
+      promises.push(crewsService.replaceCrewYields(taskId, updates.laborYield));
+    }
+    if (promises.length > 0) await Promise.all(promises);
+  };
+
+  const removeTask = (id: string) => {
+    setAllTasks(prev => prev.filter(t => t.id !== id));
+    tasksService.remove(id).catch(console.error);
+  };
+
+  // ── Tools — optimistic + Supabase background sync ────────────────────────
+
+  const addTool = (t: Tool) => {
+    const enriched = { ...t, organizationId: orgId };
+    setAllTools(prev => [...prev, enriched]);
+    toolsService.create(enriched).catch(console.error);
+  };
+  const updateTool = (id: string, updates: Partial<Tool>) => {
     setAllTools(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-  const removeTool = (id: string) => setAllTools(prev => prev.filter(t => t.id !== id));
+    toolsService.update(id, updates).catch(console.error);
+  };
+  const removeTool = (id: string) => {
+    setAllTools(prev => prev.filter(t => t.id !== id));
+    toolsService.remove(id).catch(console.error);
+  };
 
-  const addLaborCategory = (lc: LaborCategory) => setAllLaborCategories(prev => [...prev, { ...lc, organizationId: orgId }]);
-  const updateLaborCategory = (id: string, updates: Partial<LaborCategory>) => 
+  // ── LaborCategories — optimistic + Supabase background sync ──────────────
+
+  const addLaborCategory = (lc: LaborCategory) => {
+    const enriched = { ...lc, organizationId: orgId };
+    setAllLaborCategories(prev => [...prev, enriched]);
+    laborCategoriesService.create(enriched).catch(console.error);
+  };
+  const updateLaborCategory = (id: string, updates: Partial<LaborCategory>) => {
     setAllLaborCategories(prev => prev.map(lc => lc.id === id ? { ...lc, ...updates } : lc));
-  const removeLaborCategory = (id: string) => setAllLaborCategories(prev => prev.filter(lc => lc.id !== id));
+    laborCategoriesService.update(id, updates).catch(console.error);
+  };
+  const removeLaborCategory = (id: string) => {
+    setAllLaborCategories(prev => prev.filter(lc => lc.id !== id));
+    laborCategoriesService.remove(id).catch(console.error);
+  };
 
-  const addCrew = (c: Crew) => setAllCrews(prev => [...prev, { ...c, organizationId: orgId }]);
-  const updateCrew = (id: string, updates: Partial<Crew>) => 
+  // ── Crews — optimistic + Supabase background sync ────────────────────────
+
+  const addCrew = (c: Crew) => {
+    const enriched = { ...c, organizationId: orgId };
+    setAllCrews(prev => [...prev, enriched]);
+    crewsService.create(enriched).catch(console.error);
+  };
+  const updateCrew = (id: string, updates: Partial<Crew>) => {
     setAllCrews(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
-  const removeCrew = (id: string) => setAllCrews(prev => prev.filter(c => c.id !== id));
-  
+    crewsService.update(id, updates).catch(console.error);
+  };
+  const removeCrew = (id: string) => {
+    setAllCrews(prev => prev.filter(c => c.id !== id));
+    crewsService.remove(id).catch(console.error);
+  };
+
   const addRubro = (name: string) => setRubros(prev => [...prev, name].sort());
   const removeRubro = (name: string) => setRubros(prev => prev.filter(r => r !== name));
 
@@ -366,102 +643,139 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const createNewProject = (data: Partial<Project>) => {
-      const newId = `proj_${crypto.randomUUID().substring(0,8)}`;
-      const newProject: Project = {
-          ...INITIAL_PROJECT,
-          ...data,
-          id: newId,
-          organizationId: orgId,
-          items: data.items || []
-      };
-      setAllProjects(prev => [...prev, newProject]);
-      setActiveProjectId(newId);
+    const newId = generateId();
+    const newProject: Project = {
+      ...INITIAL_PROJECT,
+      ...data,
+      id: newId,
+      organizationId: orgId,
+      items: [],
+    };
+    // 🔍 DEBUG — eliminar antes de producción
+    console.log('[ERP] createNewProject — orgId:', orgId);
+    console.log('[ERP] createNewProject — newProject:', JSON.stringify(newProject, null, 2));
+
+    // Optimistic: muestra en UI de inmediato
+    setAllProjects(prev => [...prev, newProject]);
+    setActiveProjectId(newId);
+
+    // Persistir en Supabase; revertir si falla para evitar data loss silencioso
+    projectsService.create(newProject).catch(err => {
+      console.error('[ERP] Error al guardar proyecto en Supabase — revirtiendo:', err.message);
+      setAllProjects(prev => prev.filter(p => p.id !== newId));
+      setActiveProjectId(null);
+    });
   };
 
   const deleteProject = (id: string) => {
-      setAllProjects(prev => prev.filter(p => p.id !== id));
-      if (activeProjectId === id) {
-          setActiveProjectId(null);
-      }
+    setAllProjects(prev => prev.filter(p => p.id !== id));
+    setAllBudgetItems(prev => prev.filter(bi => bi.projectId !== id));
+    if (activeProjectId === id) setActiveProjectId(null);
+    Promise.all([
+      projectsService.remove(id),
+      budgetItemsService.removeAllForProject(id),
+    ]).catch(console.error);
   };
 
   const updateProjectSettings = (p: Partial<Project>) => {
-    // Update the *Active* project
-    setAllProjects(prev => prev.map(proj => 
-        (proj.id === project.id && proj.organizationId === orgId) ? { ...proj, ...p } : proj
+    setAllProjects(prev => prev.map(proj =>
+      (proj.id === project.id && proj.organizationId === orgId) ? { ...proj, ...p } : proj
     ));
+    projectsService.update(project.id, p).catch(console.error);
   };
 
-  // --- SAVE PROJECT ACTION (MANUAL TRIGGER) ---
-  const saveProject = async () => {
-      // Force a refresh of the project state to the persistent storage.
-      return new Promise<void>((resolve) => {
-          setTimeout(() => {
-              setAllProjects(prev => [...prev]);
-              resolve();
-          }, 600); // Simulate network/save delay for UX
+  // Proyectos se persisten en tiempo real vía optimistic updates.
+  // saveProject se mantiene por compatibilidad de API.
+  const saveProject = async (): Promise<void> => {
+    return Promise.resolve();
+  };
+
+  // ── Budget Items — optimistic + Supabase background sync ─────────────────
+
+  const addBudgetItem = (item: BudgetItem): Promise<void> => {
+    const enriched = { ...item, projectId: project.id, organizationId: orgId };
+    console.log(`[ERP:addBudgetItem] intentando INSERT taskId=${enriched.taskId?.slice(0,8)} projectId=${enriched.projectId?.slice(0,8)} orgId=${enriched.organizationId?.slice(0,8)}`);
+    setAllBudgetItems(prev => [...prev, enriched]);
+    return budgetItemsService.create(enriched)
+      .then(() => console.log('[ERP:addBudgetItem] ✓ INSERT OK en Supabase'))
+      .catch(err => {
+        console.error('[ERP:addBudgetItem] ✗ INSERT FALLÓ:', err.message);
+        throw err; // re-throw para que el caller pueda reaccionar
       });
   };
 
-  const addBudgetItem = (item: BudgetItem) => {
-    updateProjectSettings({ items: [...project.items, item] });
-  };
-
   const removeBudgetItem = (itemId: string) => {
-    updateProjectSettings({ items: project.items.filter(i => i.id !== itemId) });
+    setAllBudgetItems(prev => prev.filter(bi => bi.id !== itemId));
+    budgetItemsService.remove(itemId).catch(console.error);
   };
 
   const updateBudgetItem = (itemId: string, updates: Partial<BudgetItem>) => {
-    updateProjectSettings({ items: project.items.map(i => i.id === itemId ? { ...i, ...updates } : i) });
+    setAllBudgetItems(prev => prev.map(bi => bi.id === itemId ? { ...bi, ...updates } : bi));
+    budgetItemsService.update(itemId, updates).catch(console.error);
   };
+
+  // ── Yields — optimistic + Supabase background sync ───────────────────────
 
   const addTaskYield = (y: TaskYield) => {
+    const enriched = { ...y, organizationId: orgId };
     setYields(prev => {
-        const exists = prev.some(i => i.taskId === y.taskId && i.materialId === y.materialId);
-        if (exists) {
-            return prev.map(i => (i.taskId === y.taskId && i.materialId === y.materialId) ? y : i);
-        }
-        return [...prev, y];
+      const exists = prev.some(i => i.taskId === enriched.taskId && i.materialId === enriched.materialId);
+      if (exists) return prev.map(i => (i.taskId === enriched.taskId && i.materialId === enriched.materialId) ? enriched : i);
+      return [...prev, enriched];
     });
+    tasksService.upsertYield(enriched).catch(console.error);
   };
 
-  const removeTaskYield = (taskId: string, materialId: string) => setYields(prev => prev.filter(i => !(i.taskId === taskId && i.materialId === materialId)));
-  
+  const removeTaskYield = (taskId: string, materialId: string) => {
+    setYields(prev => prev.filter(i => !(i.taskId === taskId && i.materialId === materialId)));
+    tasksService.removeYield(taskId, materialId).catch(console.error);
+  };
+
   const addTaskToolYield = (y: TaskToolYield) => {
+    const enriched = { ...y, organizationId: orgId };
     setToolYields(prev => {
-        const exists = prev.some(i => i.taskId === y.taskId && i.toolId === y.toolId);
-        if (exists) {
-            return prev.map(i => (i.taskId === y.taskId && i.toolId === y.toolId) ? y : i);
-        }
-        return [...prev, y];
+      const exists = prev.some(i => i.taskId === enriched.taskId && i.toolId === enriched.toolId);
+      if (exists) return prev.map(i => (i.taskId === enriched.taskId && i.toolId === enriched.toolId) ? enriched : i);
+      return [...prev, enriched];
     });
+    tasksService.upsertToolYield(enriched).catch(console.error);
   };
 
-  const removeTaskToolYield = (taskId: string, toolId: string) => setToolYields(prev => prev.filter(i => !(i.taskId === taskId && i.toolId === toolId)));
+  const removeTaskToolYield = (taskId: string, toolId: string) => {
+    setToolYields(prev => prev.filter(i => !(i.taskId === taskId && i.toolId === toolId)));
+    tasksService.removeToolYield(taskId, toolId).catch(console.error);
+  };
+
+  // ── TaskCrewYields — optimistic + Supabase background sync ──────────────
 
   const addTaskCrewYield = (y: TaskCrewYield) => {
     setTaskCrewYields(prev => {
-        const exists = prev.some(i => i.taskId === y.taskId && i.crewId === y.crewId);
-        if (exists) {
-            return prev.map(i => (i.taskId === y.taskId && i.crewId === y.crewId) ? y : i);
-        }
-        return [...prev, y];
+      const exists = prev.some(i => i.taskId === y.taskId && i.crewId === y.crewId);
+      if (exists) return prev.map(i => (i.taskId === y.taskId && i.crewId === y.crewId) ? y : i);
+      return [...prev, y];
     });
+    crewsService.upsertCrewYield(y).catch(console.error);
   };
 
-  const removeTaskCrewYield = (taskId: string, crewId: string) => setTaskCrewYields(prev => prev.filter(i => !(i.taskId === taskId && i.crewId === crewId)));
+  const removeTaskCrewYield = (taskId: string, crewId: string) => {
+    setTaskCrewYields(prev => prev.filter(i => !(i.taskId === taskId && i.crewId === crewId)));
+    crewsService.removeCrewYield(taskId, crewId).catch(console.error);
+  };
 
   const addTaskLaborYield = (y: TaskLaborYield) => {
+    const enriched = { ...y, organizationId: orgId };
     setTaskLaborYields(prev => {
-        const exists = prev.some(i => i.taskId === y.taskId && i.laborCategoryId === y.laborCategoryId);
-        if (exists) {
-            return prev.map(i => (i.taskId === y.taskId && i.laborCategoryId === y.laborCategoryId) ? y : i);
-        }
-        return [...prev, y];
+      const exists = prev.some(i => i.taskId === enriched.taskId && i.laborCategoryId === enriched.laborCategoryId);
+      if (exists) return prev.map(i => (i.taskId === enriched.taskId && i.laborCategoryId === enriched.laborCategoryId) ? enriched : i);
+      return [...prev, enriched];
     });
+    tasksService.upsertLaborYield(enriched).catch(console.error);
   };
 
-  const removeTaskLaborYield = (taskId: string, laborCategoryId: string) => setTaskLaborYields(prev => prev.filter(i => !(i.taskId === taskId && i.laborCategoryId === laborCategoryId)));
+  const removeTaskLaborYield = (taskId: string, laborCategoryId: string) => {
+    setTaskLaborYields(prev => prev.filter(i => !(i.taskId === taskId && i.laborCategoryId === laborCategoryId)));
+    tasksService.removeLaborYield(taskId, laborCategoryId).catch(console.error);
+  };
 
   const loadTemplate = (template: ProjectTemplate) => {
     const newTasks: Task[] = [];
@@ -473,31 +787,33 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (existing) {
         taskId = existing.id;
       } else {
-        taskId = `t_${crypto.randomUUID().substring(0,8)}`;
+        taskId = generateId();
         newTasks.push({ ...t, id: taskId, organizationId: orgId } as Task);
       }
 
       newBudgetItems.push({
-        id: crypto.randomUUID(),
+        id: generateId(),
         taskId: taskId,
-        quantity: 1, 
+        quantity: 1,
         manualDuration: 0
       });
     });
 
     if (newTasks.length > 0) {
       setAllTasks(prev => [...prev, ...newTasks]);
+      newTasks.forEach(t => tasksService.create(t).catch(console.error));
     }
-    
-    // Update active project
-    updateProjectSettings({ items: [...project.items, ...newBudgetItems] });
+
+    const enrichedItems = newBudgetItems.map(item => ({ ...item, projectId: project.id }));
+    setAllBudgetItems(prev => [...prev, ...enrichedItems]);
+    enrichedItems.forEach(item => budgetItemsService.create(item).catch(console.error));
   };
 
   const createSnapshot = (name: string, totalCost: number) => {
       const newSnapshot: Snapshot = {
-          id: crypto.randomUUID(),
+          id: generateId(),
           organizationId: orgId,
-          projectId: project.id, // Added projectId
+          projectId: project.id,
           date: new Date().toISOString(),
           name,
           totalCost,
@@ -513,9 +829,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const getProjectStockStatus = (): MaterialStockStatus[] => {
       const status: Record<string, MaterialStockStatus> = {};
-      
+
       project.items.forEach(item => {
-          // Optimized Lookup
           const taskYields = yieldsIndex[item.taskId] || [];
           taskYields.forEach(ty => {
               if (!status[ty.materialId]) {
@@ -549,14 +864,24 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           s.pending = Math.max(0, s.budgeted - s.received);
       });
 
-      return Object.values(status).sort((a,b) => b.pending - a.pending); 
+      return Object.values(status).sort((a,b) => b.pending - a.pending);
   };
 
   const resetData = () => {
+    // Limpia estado local para la org activa.
+    // Nota: las entidades Supabase (projects, tasks, budget_items, yields)
+    // no se eliminan del servidor en este reset — solo se limpia la memoria local.
+    const orgProjectIds = new Set(allProjects.filter(p => p.organizationId === orgId).map(p => p.id));
     setAllMaterials(prev => prev.filter(x => x.organizationId !== orgId));
-    setAllTasks(prev => prev.filter(x => x.organizationId !== orgId));
-    setAllProjects(prev => prev.filter(x => x.organizationId !== orgId));
+    setAllProjects([]);
+    setAllTasks([]);
+    setAllBudgetItems([]);
+    setYields([]);
+    setToolYields([]);
+    setTaskLaborYields([]);
     setActiveProjectId(null);
+    // Snapshots y otros en localStorage
+    void orgProjectIds;
   };
 
   // --- DATABASE EXPORT / IMPORT (PERSISTENCE) ---
@@ -571,6 +896,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               allLaborCategories,
               allCrews,
               allProjects,
+              allBudgetItems,
               yields,
               toolYields,
               taskCrewYields,
@@ -581,7 +907,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               allMeasurementSheets,
               allQualityProtocols,
               allQualityInspections,
-              allNonConformities
+              allNonConformities,
+              allProjectCertificates
           }
       };
       return JSON.stringify(db, null, 2);
@@ -591,7 +918,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       try {
           const db = JSON.parse(json);
           if (!db.data) return { success: false, message: 'Formato de respaldo inválido.' };
-          
+
           if(confirm('ADVERTENCIA: Esta acción sobrescribirá todos los datos actuales. ¿Desea continuar?')) {
               setAllMaterials(db.data.allMaterials || []);
               setAllTasks(db.data.allTasks || []);
@@ -599,6 +926,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               setAllLaborCategories(db.data.allLaborCategories || []);
               setAllCrews(db.data.allCrews || []);
               setAllProjects(db.data.allProjects || []);
+              setAllBudgetItems(db.data.allBudgetItems || []);
               setYields(db.data.yields || []);
               setToolYields(db.data.toolYields || []);
               setTaskCrewYields(db.data.taskCrewYields || []);
@@ -610,10 +938,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               setAllQualityProtocols(db.data.allQualityProtocols || []);
               setAllQualityInspections(db.data.allQualityInspections || []);
               setAllNonConformities(db.data.allNonConformities || []);
-              
-              // Reset active state
+              setAllProjectCertificates(db.data.allProjectCertificates || []);
               setActiveProjectId(null);
-              
               return { success: true, message: 'Base de datos restaurada correctamente.' };
           }
           return { success: false, message: 'Restauración cancelada.' };
@@ -626,11 +952,14 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       const parsed = JSON.parse(jsonData);
       if (!Array.isArray(parsed)) return { success: false, message: 'Formato inválido.' };
-      
+
       const enriched = parsed.map(i => ({...i, organizationId: orgId}));
 
       if (type === 'materials') setAllMaterials(prev => [...prev, ...enriched]);
-      else if (type === 'tasks') setAllTasks(prev => [...prev, ...enriched]);
+      else if (type === 'tasks') {
+        setAllTasks(prev => [...prev, ...enriched]);
+        enriched.forEach((t: Task) => tasksService.create(t).catch(console.error));
+      }
       else if (type === 'tools') setAllTools(prev => [...prev, ...enriched]);
       else if (type === 'labor') setAllLaborCategories(prev => [...prev, ...enriched]);
       return { success: true, message: 'Importación exitosa.' };
@@ -640,13 +969,12 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const addSubcontractor = (s: Subcontractor) => setAllSubcontractors(prev => [...prev, { ...s, organizationId: orgId }]);
-  const updateSubcontractor = (id: string, updates: Partial<Subcontractor>) => 
+  const updateSubcontractor = (id: string, updates: Partial<Subcontractor>) =>
       setAllSubcontractors(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
-  
+
   const addContract = (c: Contract) => setAllContracts(prev => [...prev, { ...c, organizationId: orgId }]);
   const addCertification = (c: Certification) => setAllCertifications(prev => [...prev, { ...c, organizationId: orgId }]);
 
-  // Calendar Presets
   const addCalendarPreset = (preset: CalendarPreset) => {
       setCalendarPresets(prev => [...prev, preset]);
   };
@@ -665,43 +993,42 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
   };
 
-  // --- DOCUMENTS MANAGEMENT ---
   const addDocument = (doc: ProjectDocument) => {
-      setAllDocuments(prev => [doc, ...prev]);
+      setAllDocuments(prev => [{ ...doc, organizationId: orgId }, ...prev]);
   };
 
   const removeDocument = (id: string) => {
       setAllDocuments(prev => prev.filter(d => d.id !== id));
   };
 
-  // --- MEASUREMENT SHEETS MANAGEMENT ---
   const saveMeasurementSheet = (sheet: MeasurementSheet) => {
+      const owned = { ...sheet, organizationId: orgId };
       setAllMeasurementSheets(prev => {
-          const exists = prev.find(s => s.id === sheet.id);
-          if (exists) {
-              return prev.map(s => s.id === sheet.id ? sheet : s);
-          }
-          return [...prev, sheet];
+          const exists = prev.find(s => s.id === owned.id);
+          if (exists) return prev.map(s => s.id === owned.id ? owned : s);
+          return [...prev, owned];
       });
   };
 
-  // The Bridge: Update Budget Item Quantity based on Measurement Sheet Total
   const syncMeasurementToBudget = (sheetId: string) => {
       const sheet = allMeasurementSheets.find(s => s.id === sheetId);
       if (!sheet) return;
-      
       updateBudgetItem(sheet.budgetItemId, { quantity: sheet.totalQuantity });
   };
 
-  // --- QUALITY MANAGEMENT ---
   const addQualityProtocol = (p: QualityProtocol) => setAllQualityProtocols(prev => [...prev, {...p, organizationId: orgId}]);
-  const updateQualityProtocol = (id: string, updates: Partial<QualityProtocol>) => 
+  const updateQualityProtocol = (id: string, updates: Partial<QualityProtocol>) =>
       setAllQualityProtocols(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
-  
-  const addQualityInspection = (i: QualityInspection) => setAllQualityInspections(prev => [i, ...prev]);
-  const addNonConformity = (n: NonConformity) => setAllNonConformities(prev => [n, ...prev]);
+
+  const addQualityInspection = (i: QualityInspection) =>
+      setAllQualityInspections(prev => [{ ...i, organizationId: orgId }, ...prev]);
+  const addNonConformity = (n: NonConformity) =>
+      setAllNonConformities(prev => [{ ...n, organizationId: orgId }, ...prev]);
   const updateNonConformity = (id: string, updates: Partial<NonConformity>) =>
       setAllNonConformities(prev => prev.map(n => n.id === id ? { ...n, ...updates } : n));
+
+  const addProjectCertificate = (cert: ProjectCertificate) =>
+      setAllProjectCertificates(prev => [...prev, cert]);
 
   return (
     <ERPContext.Provider value={{
@@ -717,7 +1044,7 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addLaborCategory, updateLaborCategory, removeLaborCategory,
       addCrew, updateCrew, removeCrew,
       addRubro, removeRubro, addRubroPreset, removeRubroPreset,
-      updateProjectSettings, addBudgetItem, removeBudgetItem, updateBudgetItem,
+      budgetItemsLoading, tasksLoaded, updateProjectSettings, addBudgetItem, removeBudgetItem, updateBudgetItem,
       addTaskYield, removeTaskYield, addTaskToolYield, removeTaskToolYield, addTaskCrewYield, removeTaskCrewYield, addTaskLaborYield, removeTaskLaborYield,
       loadTemplate, importData, createSnapshot, resetData,
       exportDatabase, importDatabase,
@@ -727,7 +1054,9 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addDocument, removeDocument, saveMeasurementSheet, syncMeasurementToBudget,
       createNewProject, setActiveProject, deleteProject, saveProject, exitProject,
       // Quality
-      addQualityProtocol, updateQualityProtocol, addQualityInspection, addNonConformity, updateNonConformity
+      addQualityProtocol, updateQualityProtocol, addQualityInspection, addNonConformity, updateNonConformity,
+      // Project Certificates
+      projectCertificates, addProjectCertificate
     }}>
       {children}
     </ERPContext.Provider>

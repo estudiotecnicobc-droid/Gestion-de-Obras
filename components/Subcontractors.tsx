@@ -1,24 +1,28 @@
 import React, { useState, useMemo } from 'react';
 import { useERP } from '../context/ERPContext';
-import { calculateUnitPrice } from '../services/calculationService';
-import { 
-  Users, UserPlus, FileSignature, ShieldCheck, BadgeAlert, Plus, Calendar, 
+import { generateId } from '../utils/generateId';
+import { useAuth } from '../context/AuthContext';
+import { useProjectSchedule } from '../hooks/useProjectSchedule';
+import {
+  Users, UserPlus, FileSignature, ShieldCheck, BadgeAlert, Plus, Calendar,
   DollarSign, ArrowRight, CheckCircle2, AlertTriangle, FileText, Check, Save,
   HardHat, ClipboardCheck, History, Wallet
 } from 'lucide-react';
 import { Subcontractor, Contract, Certification, ContractItem } from '../types';
 
 export const Subcontractors: React.FC = () => {
-  const { 
-      subcontractors, contracts, certifications, project, tasks, 
+  const {
+      subcontractors, contracts, certifications, project, tasks,
       addSubcontractor, updateSubcontractor, addContract, addCertification,
-      // Indexes required for price calculation
-      yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, 
-      taskCrewYieldsIndex, crewsMap, laborCategoriesMap 
   } = useERP();
-  
+
+  const { itemCosts } = useProjectSchedule();
+
+  const { user } = useAuth();
+  const currentOrgId = user?.organizationId ?? '';
+
   const [activeView, setActiveView] = useState<'list' | 'contracts' | 'certify'>('list');
-  
+
   // --- STATE FOR NEW SUBCONTRACTOR ---
   const [newSub, setNewSub] = useState<Partial<Subcontractor>>({
       name: '', cuit: '', category: '', documents: []
@@ -30,14 +34,14 @@ export const Subcontractors: React.FC = () => {
       subId: string;
       desc: string;
       retention: number;
-      selectedItems: Set<string>; // BudgetItemIds
+      selectedItems: Set<string>;
   }>({ subId: '', desc: '', retention: 5, selectedItems: new Set() });
   const [showAddContract, setShowAddContract] = useState(false);
 
   // --- STATE FOR CERTIFICATION ---
   const [selectedContractId, setSelectedContractId] = useState<string>('');
-  const [certPeriod, setCertPeriod] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
-  const [currentCertValues, setCurrentCertValues] = useState<Record<string, number>>({}); // contractItemId -> % this period
+  const [certPeriod, setCertPeriod] = useState(new Date().toISOString().slice(0, 7));
+  const [currentCertValues, setCurrentCertValues] = useState<Record<string, number>>({});
 
   // --- HELPERS ---
   const checkDocsStatus = (sub: Subcontractor) => {
@@ -58,21 +62,33 @@ export const Subcontractors: React.FC = () => {
       return { totalPaid, totalRetention, count: certs.length };
   };
 
+  /**
+   * Devuelve el porcentaje acumulado certificado por budgetItemId para un contrato dado.
+   * Usado para validar el cap del 100% antes de emitir una nueva certificación.
+   */
+  const getAccumulatedPctByItem = (contractId: string): Record<string, number> => {
+      const acc: Record<string, number> = {};
+      certifications
+        .filter(c => c.contractId === contractId)
+        .forEach(cert => {
+          cert.items.forEach(ci => {
+            acc[ci.contractItemId] = (acc[ci.contractItemId] ?? 0) + ci.percentageThisPeriod;
+          });
+        });
+      return acc;
+  };
+
   // --- HANDLERS ---
   const handleSaveSub = () => {
       if (!newSub.name || !newSub.cuit) return;
-      // Mock documents creation for demo
-      const docs = [
-          { id: crypto.randomUUID(), type: 'ART' as const, name: 'Certificado ART', expirationDate: new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString(), isValid: true },
-          { id: crypto.randomUUID(), type: 'VIDA' as const, name: 'Seguro Vida Obligatorio', expirationDate: new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString(), isValid: true }
-      ];
+      // Documentos vacíos: el usuario debe cargar los certificados reales (ART, Vida, etc.)
       addSubcontractor({
-          id: crypto.randomUUID(),
-          organizationId: 'org_a',
+          id: generateId(),
+          organizationId: currentOrgId,
           name: newSub.name,
           cuit: newSub.cuit,
           category: newSub.category || 'General',
-          documents: docs,
+          documents: [],
           phone: newSub.phone,
           email: newSub.email
       });
@@ -82,40 +98,23 @@ export const Subcontractors: React.FC = () => {
 
   const handleSaveContract = () => {
       if (!newContract.subId || newContract.selectedItems.size === 0) return;
-      
+
       const contractItems: ContractItem[] = [];
       newContract.selectedItems.forEach(bid => {
           const bItem = project.items.find(i => i.id === bid);
           if (bItem) {
-              const task = tasks.find(t => t.id === bItem.taskId);
-              let unitPrice = 0;
-              
-              // Calculate Full Unit Price (Mat + Labor + Tool + Fixed)
-              if (task) {
-                  const analysis = calculateUnitPrice(
-                      task,
-                      yieldsIndex,
-                      materialsMap,
-                      toolYieldsIndex,
-                      toolsMap,
-                      taskCrewYieldsIndex,
-                      crewsMap,
-                      laborCategoriesMap
-                  );
-                  unitPrice = analysis.totalUnitCost;
-              }
-
+              const unitPrice = itemCosts.find(c => c.id === bid)?.unitCost ?? 0;
               contractItems.push({
                   budgetItemId: bid,
                   taskId: bItem.taskId,
-                  agreedUnitPrice: unitPrice // Uses the calculated budget price
+                  agreedUnitPrice: unitPrice
               });
           }
       });
 
       addContract({
-          id: crypto.randomUUID(),
-          organizationId: 'org_a',
+          id: generateId(),
+          organizationId: currentOrgId,
           projectId: project.id,
           subcontractorId: newContract.subId,
           description: newContract.desc,
@@ -133,16 +132,32 @@ export const Subcontractors: React.FC = () => {
       const contract = contracts.find(c => c.id === selectedContractId);
       if (!contract) return;
 
+      // Validar cap acumulado: ningún ítem puede superar el 100% entre todos los períodos
+      const prevPct = getAccumulatedPctByItem(selectedContractId);
+      const overflowItem = contract.items.find(ci => {
+        const prev = prevPct[ci.budgetItemId] ?? 0;
+        const thisPeriod = currentCertValues[ci.budgetItemId] ?? 0;
+        return prev + thisPeriod > 100;
+      });
+
+      if (overflowItem) {
+        const bItem = project.items.find(i => i.id === overflowItem.budgetItemId);
+        const t = tasks.find(tsk => tsk.id === bItem?.taskId);
+        const label = t?.name ?? overflowItem.budgetItemId;
+        // TODO: reemplazar este alert con un modal de React en el Sprint siguiente
+        alert(`Error: el ítem "${label}" superaría el 100% de certificación acumulada. Ajustá los porcentajes antes de continuar.`);
+        return;
+      }
+
       let gross = 0;
       const certItems = contract.items.map(ci => {
-          const val = currentCertValues[ci.budgetItemId] || 0; // % entered
+          const val = currentCertValues[ci.budgetItemId] || 0;
           const bItem = project.items.find(i => i.id === ci.budgetItemId);
           if (!bItem) return null;
-          
           const amount = (val / 100) * (bItem.quantity * ci.agreedUnitPrice);
           gross += amount;
           return {
-              contractItemId: ci.taskId, // using taskId as ref for simplicity in this MVP
+              contractItemId: ci.budgetItemId, // ID real del ítem de presupuesto
               percentageThisPeriod: val,
               amountThisPeriod: amount
           };
@@ -152,8 +167,8 @@ export const Subcontractors: React.FC = () => {
       const net = gross - retention;
 
       addCertification({
-          id: crypto.randomUUID(),
-          organizationId: 'org_a',
+          id: generateId(),
+          organizationId: currentOrgId,
           contractId: contract.id,
           date: new Date().toISOString(),
           period: certPeriod,
@@ -164,7 +179,7 @@ export const Subcontractors: React.FC = () => {
           status: 'approved'
       });
 
-      setActiveView('contracts'); // Go back
+      setActiveView('contracts');
       setSelectedContractId('');
       setCurrentCertValues({});
   };
@@ -184,22 +199,22 @@ export const Subcontractors: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-20">
-      
+
       {/* Header Tabs */}
       <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 flex gap-2">
-          <button 
+          <button
             onClick={() => setActiveView('list')}
             className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeView === 'list' ? 'bg-slate-900 text-white shadow' : 'text-slate-500 hover:bg-slate-50'}`}
           >
               <Users size={18} /> Subcontratistas
           </button>
-          <button 
+          <button
             onClick={() => setActiveView('contracts')}
             className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeView === 'contracts' ? 'bg-blue-600 text-white shadow' : 'text-slate-500 hover:bg-slate-50'}`}
           >
               <FileSignature size={18} /> Contratos
           </button>
-          <button 
+          <button
             onClick={() => setActiveView('certify')}
             className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeView === 'certify' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500 hover:bg-slate-50'}`}
           >
@@ -239,19 +254,23 @@ export const Subcontractors: React.FC = () => {
                           <div className="text-sm text-slate-600 mb-4 flex items-center gap-2">
                               <HardHat size={14} className="text-slate-400" /> {sub.category}
                           </div>
-                          
+
                           <div className="pt-3 border-t border-slate-100">
                               <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Documentación</p>
-                              <div className="space-y-1">
-                                  {sub.documents.map(d => (
-                                      <div key={d.id} className="flex justify-between text-xs">
-                                          <span className="text-slate-600">{d.type}</span>
-                                          <span className={`${new Date(d.expirationDate) < new Date() ? 'text-red-500 font-bold' : 'text-emerald-600'}`}>
-                                              Vence: {new Date(d.expirationDate).toLocaleDateString()}
-                                          </span>
-                                      </div>
-                                  ))}
-                              </div>
+                              {sub.documents.length === 0 ? (
+                                  <p className="text-xs text-amber-600 italic">Sin documentos cargados</p>
+                              ) : (
+                                  <div className="space-y-1">
+                                      {sub.documents.map(d => (
+                                          <div key={d.id} className="flex justify-between text-xs">
+                                              <span className="text-slate-600">{d.type}</span>
+                                              <span className={`${new Date(d.expirationDate) < new Date() ? 'text-red-500 font-bold' : 'text-emerald-600'}`}>
+                                                  Vence: {new Date(d.expirationDate).toLocaleDateString()}
+                                              </span>
+                                          </div>
+                                      ))}
+                                  </div>
+                              )}
                           </div>
                       </div>
                   ))}
@@ -295,12 +314,11 @@ export const Subcontractors: React.FC = () => {
                           <div className="max-h-60 overflow-y-auto border rounded p-2 bg-slate-50">
                               {project.items.map(item => {
                                   const t = tasks.find(tsk => tsk.id === item.taskId);
-                                  const analysis = t ? calculateUnitPrice(t, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap) : { totalUnitCost: 0 };
-                                  
+                                  const unitPrice = itemCosts.find(c => c.id === item.id)?.unitCost ?? 0;
                                   return (
                                       <div key={item.id} className="flex items-center gap-2 py-1 border-b border-slate-200 last:border-0">
-                                          <input 
-                                            type="checkbox" 
+                                          <input
+                                            type="checkbox"
                                             checked={newContract.selectedItems.has(item.id)}
                                             onChange={() => {
                                                 const newSet = new Set(newContract.selectedItems);
@@ -313,12 +331,12 @@ export const Subcontractors: React.FC = () => {
                                               <div className="text-right">
                                                   <span className="text-xs text-slate-400 mr-2">{item.quantity} {t?.unit}</span>
                                                   <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
-                                                      ${analysis.totalUnitCost.toFixed(2)}
+                                                      ${unitPrice.toFixed(2)}
                                                   </span>
                                               </div>
                                           </div>
                                       </div>
-                                  )
+                                  );
                               })}
                           </div>
                       </div>
@@ -363,9 +381,9 @@ export const Subcontractors: React.FC = () => {
                                       <span className="font-bold text-emerald-600">${progress.totalPaid.toLocaleString()}</span>
                                   </div>
                               </div>
-                              
+
                               <div className="mt-4 flex gap-2">
-                                  <button 
+                                  <button
                                     onClick={() => { setSelectedContractId(c.id); setActiveView('certify'); }}
                                     className="text-xs font-bold bg-white border border-emerald-200 text-emerald-700 px-3 py-1.5 rounded hover:bg-emerald-50 flex items-center gap-1"
                                   >
@@ -396,14 +414,14 @@ export const Subcontractors: React.FC = () => {
                           {contracts.map(c => {
                               const sub = subcontractors.find(s => s.id === c.subcontractorId);
                               return (
-                                  <button 
-                                    key={c.id} 
+                                  <button
+                                    key={c.id}
                                     onClick={() => setSelectedContractId(c.id)}
                                     className="bg-white border border-slate-200 px-4 py-2 rounded-lg shadow-sm hover:border-blue-300 hover:text-blue-600 font-bold text-sm transition-all"
                                   >
                                       {sub?.name} - {c.description}
                                   </button>
-                              )
+                              );
                           })}
                       </div>
                   </div>
@@ -413,7 +431,8 @@ export const Subcontractors: React.FC = () => {
                           const contract = contracts.find(c => c.id === selectedContractId);
                           const sub = subcontractors.find(s => s.id === contract?.subcontractorId);
                           const docsStatus = sub ? checkDocsStatus(sub) : { ok: false };
-                          
+                          const prevPct = getAccumulatedPctByItem(selectedContractId);
+
                           if (!contract || !sub) return null;
 
                           return (
@@ -423,10 +442,10 @@ export const Subcontractors: React.FC = () => {
                                           <h2 className="text-xl font-bold text-slate-800">{sub.name}</h2>
                                           <p className="text-sm text-slate-500">Certificación Período: {certPeriod}</p>
                                       </div>
-                                      
+
                                       <div className="flex flex-col items-end gap-2">
-                                          <input 
-                                            type="month" 
+                                          <input
+                                            type="month"
                                             className="p-2 border border-slate-300 rounded text-sm font-bold"
                                             value={certPeriod}
                                             onChange={e => setCertPeriod(e.target.value)}
@@ -446,6 +465,7 @@ export const Subcontractors: React.FC = () => {
                                                   <th className="pb-3">Ítem</th>
                                                   <th className="pb-3 text-right">Cant. Total</th>
                                                   <th className="pb-3 text-right">Precio Pactado</th>
+                                                  <th className="pb-3 text-right text-slate-400">% Certif. Anterior</th>
                                                   <th className="pb-3 text-right text-emerald-600 w-32">% Avance Mes</th>
                                                   <th className="pb-3 text-right">Monto a Certificar</th>
                                               </tr>
@@ -456,28 +476,37 @@ export const Subcontractors: React.FC = () => {
                                                   const t = tasks.find(tsk => tsk.id === ci.taskId);
                                                   const currentVal = currentCertValues[ci.budgetItemId] || 0;
                                                   const amount = (currentVal / 100) * (bItem ? bItem.quantity * ci.agreedUnitPrice : 0);
+                                                  const previousPct = prevPct[ci.budgetItemId] ?? 0;
+                                                  const remaining = Math.max(0, 100 - previousPct);
+                                                  const isOverflow = previousPct + currentVal > 100;
 
                                                   return (
-                                                      <tr key={ci.budgetItemId} className="hover:bg-slate-50">
+                                                      <tr key={ci.budgetItemId} className={`hover:bg-slate-50 ${isOverflow ? 'bg-red-50' : ''}`}>
                                                           <td className="py-3 font-medium text-slate-700">{t?.name}</td>
                                                           <td className="py-3 text-right text-slate-500">{bItem?.quantity} {t?.unit}</td>
                                                           <td className="py-3 text-right font-mono">${ci.agreedUnitPrice.toFixed(2)}</td>
+                                                          <td className="py-3 text-right text-slate-400 text-xs font-mono">
+                                                            {previousPct.toFixed(1)}%
+                                                          </td>
                                                           <td className="py-3 text-right">
                                                               <div className="flex items-center justify-end gap-1">
-                                                                  <input 
-                                                                    type="number" min="0" max="100"
-                                                                    className="w-16 p-1 text-right border border-slate-300 rounded focus:border-emerald-500 outline-none font-bold"
+                                                                  <input
+                                                                    type="number" min="0" max={remaining}
+                                                                    className={`w-16 p-1 text-right border rounded focus:outline-none font-bold ${isOverflow ? 'border-red-400 focus:border-red-500 bg-red-50' : 'border-slate-300 focus:border-emerald-500'}`}
                                                                     value={currentVal}
-                                                                    onChange={e => setCurrentCertValues({...currentCertValues, [ci.budgetItemId]: parseFloat(e.target.value)})}
+                                                                    onChange={e => setCurrentCertValues({...currentCertValues, [ci.budgetItemId]: parseFloat(e.target.value) || 0})}
                                                                   />
                                                                   <span className="text-slate-400">%</span>
                                                               </div>
+                                                              {isOverflow && (
+                                                                <p className="text-red-500 text-[10px] text-right mt-0.5">Máx: {remaining}%</p>
+                                                              )}
                                                           </td>
                                                           <td className="py-3 text-right font-bold text-slate-800">
                                                               ${amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                                                           </td>
                                                       </tr>
-                                                  )
+                                                  );
                                               })}
                                           </tbody>
                                       </table>
@@ -494,6 +523,10 @@ export const Subcontractors: React.FC = () => {
                                               });
                                               const retention = totalGross * (contract.retentionPercent / 100);
                                               const net = totalGross - retention;
+                                              const hasOverflow = contract.items.some(ci => {
+                                                  const prev = prevPct[ci.budgetItemId] ?? 0;
+                                                  return prev + (currentCertValues[ci.budgetItemId] ?? 0) > 100;
+                                              });
 
                                               return (
                                                   <>
@@ -511,20 +544,22 @@ export const Subcontractors: React.FC = () => {
                                                           <span>${net.toLocaleString()}</span>
                                                       </div>
 
-                                                      <button 
+                                                      <button
                                                           onClick={handleCertify}
-                                                          disabled={!docsStatus.ok || totalGross === 0}
+                                                          disabled={!docsStatus.ok || totalGross === 0 || hasOverflow}
                                                           className="mt-4 w-64 bg-emerald-600 text-white py-3 rounded-lg font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex justify-center items-center gap-2"
                                                       >
-                                                          {docsStatus.ok ? <><CheckCircle2 size={18}/> Emitir Certificado</> : <><AlertTriangle size={18}/> Docs Vencidos</>}
+                                                          {!docsStatus.ok ? <><AlertTriangle size={18}/> Docs Vencidos</>
+                                                          : hasOverflow ? <><AlertTriangle size={18}/> Supera 100%</>
+                                                          : <><CheckCircle2 size={18}/> Emitir Certificado</>}
                                                       </button>
                                                   </>
-                                              )
+                                              );
                                           })()}
                                       </div>
                                   </div>
                               </>
-                          )
+                          );
                       })()}
                   </div>
               )}

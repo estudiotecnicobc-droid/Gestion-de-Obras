@@ -1,15 +1,20 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
 import { calculateUnitPrice } from '../services/calculationService';
-import { 
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCcw, 
+import {
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCcw,
   Database, Wrench, Package, ListChecks, Plus, Trash2, Edit2, Save, X, Users, Clock, BarChart3, Tags, ClipboardCopy, ArrowRight, Calculator, FileSpreadsheet, Settings, Hammer, AlertCircle, HardHat, Info, Printer, PieChart as PieChartIcon, Activity,
-  ZoomOut, ZoomIn, DollarSign, Percent, LayoutGrid, Truck, CheckSquare, Square, Check, Bot, Sparkles, TrendingUp, Search, Download, ShieldCheck, ChevronDown, ChevronRight, ArrowUp, ArrowDown
+  ZoomOut, ZoomIn, DollarSign, Percent, LayoutGrid, Truck, CheckSquare, Square, Check, Bot, Sparkles, TrendingUp, Search, Download, ShieldCheck, ChevronDown, ChevronRight, ArrowUp, ArrowDown, BookOpen
 } from 'lucide-react';
 import { INITIAL_MATERIALS, INITIAL_TOOLS, INITIAL_LABOR_CATEGORIES } from '../constants';
+import { generateId } from '../utils/generateId';
 import { Material, Task, Tool, LaborCategory, TaskYield, Crew } from '../types';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { GoogleGenAI } from "@google/genai";
+import { MasterMaterialsPanel } from './MasterMaterialsPanel';
+import { MasterTasksPanel } from './MasterTasksPanel';
+import { BudgetTemplatesPanel } from './BudgetTemplatesPanel';
+import { UsersPanel } from './UsersPanel';
 
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
@@ -48,7 +53,7 @@ export const DataAdmin: React.FC = () => {
     yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, laborCategoriesMap, taskCrewYieldsIndex, crewsMap, taskLaborYieldsIndex
   } = useERP();
   
-  const [activeSubTab, setActiveSubTab] = useState<'materials' | 'tasks' | 'tools' | 'labor' | 'rubros' | 'apu' | 'crews' | 'system'>('materials');
+  const [activeSubTab, setActiveSubTab] = useState<'materials' | 'tasks' | 'tools' | 'labor' | 'rubros' | 'apu' | 'crews' | 'system' | 'master' | 'master-tasks' | 'templates'>('materials');
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
@@ -468,7 +473,7 @@ export const DataAdmin: React.FC = () => {
   
   // --- Create Task Flow ---
   const handleCreateTask = () => {
-      const newId = crypto.randomUUID();
+      const newId = generateId();
       const newTask: Task = {
           id: newId,
           organizationId: 'org_a',
@@ -487,7 +492,7 @@ export const DataAdmin: React.FC = () => {
   };
 
   const handleCreateTaskFromPreset = (preset: Partial<Task>) => {
-      const newId = crypto.randomUUID();
+      const newId = generateId();
       const newTask: Task = {
           id: newId,
           organizationId: 'org_a',
@@ -624,6 +629,7 @@ export const DataAdmin: React.FC = () => {
   };
 
   const startEdit = (item: any) => {
+    setIsAdding(false);
     setEditingId(item.id);
     if (activeSubTab === 'materials') setDraftMaterial(item);
     if (activeSubTab === 'tasks') setDraftTask(item);
@@ -645,19 +651,19 @@ export const DataAdmin: React.FC = () => {
 
   const saveItem = () => {
     if (activeSubTab === 'materials' && draftMaterial) {
-      if (isAdding) addMaterial({ ...draftMaterial, id: crypto.randomUUID() } as Material);
+      if (isAdding) addMaterial({ ...draftMaterial, id: generateId() } as Material);
       else if (editingId) updateMaterial(editingId, draftMaterial);
     } else if (activeSubTab === 'tasks' && draftTask) {
-      if (isAdding) addTask({ ...draftTask, id: crypto.randomUUID() } as Task);
+      if (isAdding) addTask({ ...draftTask, id: generateId() } as Task);
       else if (editingId) updateTask(editingId, draftTask);
     } else if (activeSubTab === 'tools' && draftTool) {
-      if (isAdding) addTool({ ...draftTool, id: crypto.randomUUID() } as Tool);
+      if (isAdding) addTool({ ...draftTool, id: generateId() } as Tool);
       else if (editingId) updateTool(editingId, draftTool);
     } else if (activeSubTab === 'labor' && draftLabor) {
-      if (isAdding) addLaborCategory({ ...draftLabor, id: crypto.randomUUID() } as LaborCategory);
+      if (isAdding) addLaborCategory({ ...draftLabor, id: generateId() } as LaborCategory);
       else if (editingId) updateLaborCategory(editingId, draftLabor);
     } else if (activeSubTab === 'crews' && draftCrew) {
-      if (isAdding) addCrew({ ...draftCrew, id: crypto.randomUUID(), composition: [] } as Crew);
+      if (isAdding) addCrew({ ...draftCrew, id: generateId(), composition: [] } as Crew);
       else if (editingId) updateCrew(editingId, draftCrew);
     } else if (activeSubTab === 'rubros' && draftRubro) {
         addRubro(draftRubro.toUpperCase());
@@ -701,7 +707,7 @@ export const DataAdmin: React.FC = () => {
               const category = cols[3]?.trim() || 'General';
               
               if (!materials.some(m => m.name === name)) {
-                  addMaterial({ id: crypto.randomUUID(), organizationId: 'org_a', name, unit, cost, category });
+                  addMaterial({ id: generateId(), organizationId: 'org_a', name, unit, cost, category });
                   count++;
               }
           } else if (activeSubTab === 'tasks' || activeSubTab === 'apu') {
@@ -712,7 +718,7 @@ export const DataAdmin: React.FC = () => {
               const dailyYield = parseFloat(cols[4]?.replace(',', '.') || '1');
 
               if (!tasks.some(t => t.name === name)) {
-                  addTask({ id: crypto.randomUUID(), organizationId: 'org_a', name, unit, category, laborCost, dailyYield });
+                  addTask({ id: generateId(), organizationId: 'org_a', name, unit, category, laborCost, dailyYield });
                   count++;
               }
           } else if (activeSubTab === 'tools') {
@@ -721,7 +727,7 @@ export const DataAdmin: React.FC = () => {
               const costPerHour = parseFloat(cols[2]?.replace(/[$,]/g, '').replace(',', '.') || '0');
               
               if (!tools.some(t => t.name === name)) {
-                  addTool({ id: crypto.randomUUID(), organizationId: 'org_a', name, category, costPerHour });
+                  addTool({ id: generateId(), organizationId: 'org_a', name, category, costPerHour });
                   count++;
               }
           } else if (activeSubTab === 'labor') {
@@ -731,7 +737,7 @@ export const DataAdmin: React.FC = () => {
               const insurancePercent = parseFloat(cols[3]?.replace('%', '') || '0');
 
               if (!laborCategories.some(l => l.role === name)) {
-                  addLaborCategory({ id: crypto.randomUUID(), organizationId: 'org_a', role: name, basicHourlyRate, socialChargesPercent, insurancePercent });
+                  addLaborCategory({ id: generateId(), organizationId: 'org_a', role: name, basicHourlyRate, socialChargesPercent, insurancePercent });
                   count++;
               }
           } else if (activeSubTab === 'rubros') {
@@ -860,49 +866,31 @@ export const DataAdmin: React.FC = () => {
 
       {/* Tabs */}
       <div className="flex flex-wrap gap-2 bg-white p-2 rounded-xl shadow-sm border border-slate-100">
-        <button 
+        <button
           onClick={() => { setActiveSubTab('materials'); cancelEdit(); setEditingAPUTask(null); setEditingCrew(null); setEditingMaterialConfig(null); }}
-          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'materials' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'text-slate-500 hover:bg-slate-50'}`}
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'materials' || activeSubTab === 'tools' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'text-slate-500 hover:bg-slate-50'}`}
         >
-          <Package size={18} /> Insumos
+          <Package size={18} /> Recursos
         </button>
-        <button 
-          onClick={() => { setActiveSubTab('tasks'); cancelEdit(); setEditingAPUTask(null); setEditingCrew(null); setEditingMaterialConfig(null); }}
-          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'tasks' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'text-slate-500 hover:bg-slate-50'}`}
-        >
-          <ListChecks size={18} /> Tareas
-        </button>
-        <button 
-          onClick={() => { setActiveSubTab('apu'); cancelEdit(); setEditingAPUTask(null); setEditingCrew(null); setEditingMaterialConfig(null); }}
-          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'apu' ? 'bg-purple-600 text-white shadow-md shadow-purple-200' : 'text-slate-500 hover:bg-slate-50'}`}
-        >
-          <Calculator size={18} /> Análisis (APU)
-        </button>
-        <button 
-          onClick={() => { setActiveSubTab('crews'); cancelEdit(); setEditingAPUTask(null); setEditingCrew(null); setEditingMaterialConfig(null); }}
-          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'crews' ? 'bg-orange-600 text-white shadow-md shadow-orange-200' : 'text-slate-500 hover:bg-slate-50'}`}
-        >
-          <HardHat size={18} /> Cuadrillas
-        </button>
-        <button 
-          onClick={() => { setActiveSubTab('tools'); cancelEdit(); setEditingAPUTask(null); setEditingCrew(null); setEditingMaterialConfig(null); }}
-          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'tools' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'text-slate-500 hover:bg-slate-50'}`}
-        >
-          <Wrench size={18} /> Equipos
-        </button>
-        <button 
+        <button
           onClick={() => { setActiveSubTab('labor'); cancelEdit(); setEditingAPUTask(null); setEditingCrew(null); setEditingMaterialConfig(null); }}
-          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'labor' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'text-slate-500 hover:bg-slate-50'}`}
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'labor' || activeSubTab === 'crews' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'text-slate-500 hover:bg-slate-50'}`}
         >
           <Users size={18} /> Mano de Obra
         </button>
-        <button 
-          onClick={() => { setActiveSubTab('rubros'); cancelEdit(); setEditingAPUTask(null); setEditingCrew(null); setEditingMaterialConfig(null); }}
-          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'rubros' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'text-slate-500 hover:bg-slate-50'}`}
+        <button
+          onClick={() => { setActiveSubTab('master-tasks'); cancelEdit(); setEditingAPUTask(null); setEditingCrew(null); setEditingMaterialConfig(null); }}
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'master-tasks' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'text-slate-500 hover:bg-slate-50'}`}
         >
-          <Tags size={18} /> Rubros
+          <BookOpen size={18} /> Analisis de Precios (APU)
         </button>
-        <button 
+        <button
+          onClick={() => { setActiveSubTab('templates'); cancelEdit(); setEditingAPUTask(null); setEditingCrew(null); setEditingMaterialConfig(null); }}
+          className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'templates' ? 'bg-violet-600 text-white shadow-md shadow-violet-200' : 'text-slate-500 hover:bg-slate-50'}`}
+        >
+          <LayoutGrid size={18} /> Plantillas
+        </button>
+        <button
           onClick={() => { setActiveSubTab('system'); cancelEdit(); setEditingAPUTask(null); setEditingCrew(null); setEditingMaterialConfig(null); }}
           className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all ${activeSubTab === 'system' ? 'bg-slate-800 text-white shadow-md shadow-slate-200' : 'text-slate-500 hover:bg-slate-50'}`}
         >
@@ -912,9 +900,20 @@ export const DataAdmin: React.FC = () => {
 
       <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleFileUpload} />
       
-      {/* SYSTEM BACKUP TAB */}
+      {/* SYSTEM TAB */}
       {activeSubTab === 'system' && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden min-h-[400px] p-8 animate-in fade-in">
+          <div className="space-y-6 animate-in fade-in">
+
+          {/* Usuarios y Permisos */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden p-8">
+              <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
+                  <Users className="text-slate-600" size={20} /> Usuarios y Permisos
+              </h3>
+              <UsersPanel />
+          </div>
+
+          {/* Respaldo y Recuperación */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden min-h-[200px] p-8">
               <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
                   <ShieldCheck className="text-slate-600" /> Respaldo y Recuperación del Sistema
               </h3>
@@ -991,10 +990,20 @@ export const DataAdmin: React.FC = () => {
                   </div>
               </div>
           </div>
+          </div>
       )}
 
+      {/* Base Maestra de Materiales (Supabase) */}
+      {activeSubTab === 'master' && <MasterMaterialsPanel />}
+
+      {/* APU Maestro — Base Maestra de Tareas (localStorage) */}
+      {activeSubTab === 'master-tasks' && <MasterTasksPanel />}
+
+      {/* Plantillas de Presupuesto */}
+      {activeSubTab === 'templates' && <BudgetTemplatesPanel />}
+
       {/* Main Table Content (Only for data tabs) */}
-      {activeSubTab !== 'system' && (
+      {activeSubTab !== 'system' && activeSubTab !== 'master' && activeSubTab !== 'master-tasks' && activeSubTab !== 'templates' && (
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden min-h-[400px]">
         <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
           <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">
@@ -1064,6 +1073,42 @@ export const DataAdmin: React.FC = () => {
             </button>
           )}
         </div>
+
+        {/* Subtabs internos — solo visibles en Recursos */}
+        {(activeSubTab === 'materials' || activeSubTab === 'tools') && (
+          <div className="flex gap-1 px-4 pt-3 pb-0 border-b border-slate-100 bg-slate-50/30">
+            <button
+              onClick={() => { cancelEdit(); setActiveSubTab('materials'); }}
+              className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-t-lg border-b-2 transition-all ${activeSubTab === 'materials' ? 'border-blue-500 text-blue-600 bg-white' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <Package size={13} /> Insumos
+            </button>
+            <button
+              onClick={() => { cancelEdit(); setActiveSubTab('tools'); }}
+              className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-t-lg border-b-2 transition-all ${activeSubTab === 'tools' ? 'border-blue-500 text-blue-600 bg-white' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <Wrench size={13} /> Equipos
+            </button>
+          </div>
+        )}
+
+        {/* Subtabs internos — solo visibles en Mano de Obra */}
+        {(activeSubTab === 'labor' || activeSubTab === 'crews') && (
+          <div className="flex gap-1 px-4 pt-3 pb-0 border-b border-slate-100 bg-slate-50/30">
+            <button
+              onClick={() => { cancelEdit(); setActiveSubTab('labor'); }}
+              className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-t-lg border-b-2 transition-all ${activeSubTab === 'labor' ? 'border-blue-500 text-blue-600 bg-white' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <Users size={13} /> Categorías
+            </button>
+            <button
+              onClick={() => { cancelEdit(); setActiveSubTab('crews'); }}
+              className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-t-lg border-b-2 transition-all ${activeSubTab === 'crews' ? 'border-orange-500 text-orange-600 bg-white' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <HardHat size={13} /> Cuadrillas
+            </button>
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">

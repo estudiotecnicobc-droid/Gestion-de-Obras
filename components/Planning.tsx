@@ -1,7 +1,7 @@
 
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { useERP } from '../context/ERPContext';
-import { addWorkingDays, diffDays, addDays, calculateUnitPrice } from '../services/calculationService';
+import { useProjectSchedule } from '../hooks/useProjectSchedule';
 import { 
   Calendar, Clock, AlertCircle, ArrowDown, Calculator, 
   ChevronsRight, Users, Check, Layout, List, PenTool,
@@ -11,13 +11,13 @@ import { LinkType } from '../types';
 import { APUBuilder } from './APUBuilder';
 
 export const Planning: React.FC = () => {
-  const { 
+  const {
     project, tasks, updateBudgetItem,
-    yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, 
-    taskCrewYieldsIndex, crewsMap, laborCategoriesMap,
-    createSnapshot, snapshots, measurementSheets // Added measurementSheets
+    createSnapshot, snapshots, measurementSheets
   } = useERP();
-  
+
+  const { evm, itemCosts, scheduledItems, cpmItems, criticalPathStats } = useProjectSchedule();
+
   // --- UI STATE ---
   const [viewMode, setViewMode] = useState<'table' | 'gantt' | 'control'>('table');
   const [editingApuId, setEditingApuId] = useState<string | null>(null);
@@ -65,186 +65,20 @@ export const Planning: React.FC = () => {
     });
   };
 
-  // Working Days Config
-  const workingDays = project.workingDays || [1,2,3,4,5]; 
-  const nonWorkingDates = project.nonWorkingDates || [];
-  const workdayHours = project.workdayHours || 9;
+  // Para colorear días no hábiles en el Gantt
+  const workingDays = project.workingDays || [1, 2, 3, 4, 5];
 
   // --- SNAPSHOT HANDLER ---
+  // evm.BAC es la suma de totalCost de todos los ítems — equivalente al reduce anterior.
   const handleSnapshot = () => {
-      // Calculate current total cost for the snapshot
-      const currentTotal = project.items.reduce((acc, item) => {
-          const task = tasks.find(t => t.id === item.taskId);
-          if (!task) return acc;
-          const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
-          return acc + (analysis.totalUnitCost * item.quantity);
-      }, 0);
-
       const name = prompt("Nombre para la línea base (Snapshot):", `Linea Base ${snapshots.length + 1}`);
       if (name) {
-          createSnapshot(name, currentTotal);
+          createSnapshot(name, evm.BAC);
       }
   };
 
-  // --- 1. SCHEDULING ENGINE (FORWARD PASS) ---
-  const scheduledItems = useMemo(() => {
-    const items = project.items.map((item, index) => ({ ...item, index: index + 1 }));
-    const results: any[] = [];
-    const processedIds = new Set<string>();
-    const getProcessedItem = (id: string) => results.find(r => r.id === id);
-
-    let iterations = 0;
-    while (processedIds.size < items.length && iterations < 100) {
-      let somethingProcessed = false;
-      items.forEach(item => {
-        if (processedIds.has(item.id)) return;
-
-        const task = tasks.find(t => t.id === item.taskId);
-        if (!task) return;
-
-        const quantity = item.quantity || 0;
-        const crewSize = item.crewsAssigned || 1; 
-        const dailyCapacity = task.dailyYield * crewSize;
-        
-        // Cost Calculation
-        const analysis = calculateUnitPrice(
-            task, 
-            yieldsIndex, 
-            materialsMap, 
-            toolYieldsIndex, 
-            toolsMap, 
-            taskCrewYieldsIndex, 
-            crewsMap, 
-            laborCategoriesMap
-        );
-        const totalCost = (analysis.totalUnitCost || 0) * quantity;
-        
-        // Duration Calculation
-        const calculatedDuration = dailyCapacity > 0 ? Math.ceil(quantity / dailyCapacity) : 1;
-        const duration = item.manualDuration || calculatedDuration;
-        
-        // Predecessor Logic (Early Start)
-        let startDate = item.startDate || project.startDate;
-
-        if (item.dependencies && item.dependencies.length > 0) {
-          let maxStartDate = new Date(project.startDate).getTime();
-          let allDepsReady = true;
-
-          item.dependencies.forEach(dep => {
-            const pred = getProcessedItem(dep.predecessorId);
-            if (!pred) { allDepsReady = false; return; }
-            
-            const predEnd = new Date(pred.end).getTime();
-            // Default FS (Finish-to-Start) logic: Start next working day
-            const calculatedStart = predEnd + 86400000; 
-            maxStartDate = Math.max(maxStartDate, calculatedStart);
-          });
-
-          if (!allDepsReady) return;
-          startDate = new Date(maxStartDate).toISOString().split('T')[0];
-        }
-
-        // Ensure start date is a working day
-        startDate = addWorkingDays(addDays(startDate, -1), 1, workingDays, nonWorkingDates); // Hack to snap to valid day
-
-        const endDate = addWorkingDays(startDate, duration, workingDays, nonWorkingDates);
-        
-        results.push({
-          ...item,
-          taskName: task.name,
-          category: task.category || 'Sin Categoría',
-          start: startDate, 
-          end: endDate,     
-          duration,
-          yieldHH: task.yieldHH || 0,
-          dailyCapacity,
-          crewSize,
-          totalCost,
-          // Temp fields for CPM
-          earlyStart: new Date(startDate).getTime(),
-          earlyFinish: new Date(endDate).getTime()
-        });
-        processedIds.add(item.id);
-        somethingProcessed = true;
-      });
-      if (!somethingProcessed) break;
-      iterations++;
-    }
-    
-    return results.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-  }, [project, tasks, workingDays, nonWorkingDates, workdayHours, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap]);
-
-  // --- 2. CRITICAL PATH METHOD (BACKWARD PASS) ---
-  const cpmItems = useMemo(() => {
-      if (scheduledItems.length === 0) return [];
-
-      // 1. Find Project Finish Date (Max Early Finish)
-      const projectFinish = Math.max(...scheduledItems.map(i => i.earlyFinish));
-
-      // 2. Map for quick access
-      const itemMap = new Map<string, any>(scheduledItems.map(i => [i.id, { ...i, lateStart: 0, lateFinish: 0, totalFloat: 0, isCritical: false }]));
-
-      // 3. Initialize Late Finish for tasks with no successors (they determine project end)
-      //    Actually, simpler: Initialize ALL Late Finishes to Project Finish initially? No.
-      //    Correct way: Identify successors for each node.
-      const successors: Record<string, string[]> = {};
-      scheduledItems.forEach(item => {
-          if(!successors[item.id]) successors[item.id] = [];
-          item.dependencies?.forEach(dep => {
-              if(!successors[dep.predecessorId]) successors[dep.predecessorId] = [];
-              successors[dep.predecessorId].push(item.id);
-          });
-      });
-
-      // 4. Backward Pass
-      // Iterate in reverse start order (roughly topological reverse)
-      const sortedReverse = [...scheduledItems].sort((a, b) => b.earlyFinish - a.earlyFinish);
-
-      sortedReverse.forEach(item => {
-          const node = itemMap.get(item.id)!;
-          const itemSuccessors = successors[item.id] || [];
-
-          if (itemSuccessors.length === 0) {
-              // No successors, LF = Project Finish
-              node.lateFinish = projectFinish;
-          } else {
-              // LF = Min(LS of successors)
-              let minLS = Number.MAX_VALUE;
-              itemSuccessors.forEach(succId => {
-                  const succ = itemMap.get(succId);
-                  // Assuming FS relationship: LS of successor - 1 day (gap) roughly
-                  // Ideally calculate based on dependency lag. 
-                  // Simplified: LS of successor. Since Succ Start depends on Node End.
-                  if (succ && succ.lateStart < minLS) {
-                      minLS = succ.lateStart;
-                  }
-              });
-              // Adjust for the gap (Start of Succ is usually End of Pred + 1 day)
-              // So End of Pred should be Start of Succ - 1 day approx (in working days logic)
-              // For simplicity in pixels/time, let's say LF = minLS.
-              node.lateFinish = minLS; 
-          }
-
-          // LS = LF - Duration
-          // Note: Duration in days needs to be converted to time delta roughly or use working days logic reverse.
-          // Simplified CPM using milliseconds:
-          const durationMs = item.earlyFinish - item.earlyStart;
-          node.lateStart = node.lateFinish - durationMs;
-
-          // Float = LS - ES (or LF - EF)
-          // Allow small epsilon for floating point dates
-          const float = (node.lateFinish - node.earlyFinish) / (1000 * 60 * 60 * 24);
-          
-          node.totalFloat = Math.max(0, float);
-          // Critical if Float is effectively 0 (e.g. < 1 day)
-          node.isCritical = node.totalFloat < 0.9;
-      });
-
-      // Sort by original Index (ID) to maintain WBS structure like MS Project
-      return Array.from(itemMap.values()).sort((a, b) => a.index - b.index);
-  }, [scheduledItems]);
-
   // --- GANTT ITEMS (WITH SUMMARIES) ---
+  // scheduledItems, cpmItems y criticalPathStats vienen de useProjectSchedule.
   const ganttItems = useMemo(() => {
       if (cpmItems.length === 0) return [];
 
@@ -292,16 +126,6 @@ export const Planning: React.FC = () => {
 
       return results;
   }, [cpmItems, collapsedSummaries]);
-
-  // --- CRITICAL PATH SUMMARY ---
-  const criticalPathStats = useMemo(() => {
-      if (cpmItems.length === 0) return { finishDate: new Date(), totalDays: 0 };
-      const maxEndDate = Math.max(...cpmItems.map(i => i.earlyFinish));
-      const finishDate = new Date(maxEndDate);
-      const startDate = new Date(project.startDate);
-      const totalDays = diffDays(project.startDate, finishDate.toISOString().split('T')[0]);
-      return { finishDate, totalDays };
-  }, [cpmItems, project.startDate]);
 
   // --- GANTT CONFIGURATION ---
   useEffect(() => {
@@ -979,22 +803,19 @@ export const Planning: React.FC = () => {
                       </div>
                       
                       {selectedSnapshotId && (() => {
-                          // Inline Calculation for Totals
+                          // Costos desde itemCosts — sin recálculo de calculateUnitPrice.
                           const controlData = project.items.map(item => {
-                              const task = tasks.find(t => t.id === item.taskId);
-                              if (!task) return null;
-                              const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
-                              const unitPrice = analysis.totalUnitCost;
+                              const ic = itemCosts.find(c => c.id === item.id);
+                              if (!ic) return null;
                               const snapshot = snapshots.find(s => s.id === selectedSnapshotId);
                               let baseQty = 0;
                               if (snapshot) {
                                   const baseItem = snapshot.items.find(i => i.id === item.id) || snapshot.items.find(i => i.taskId === item.taskId);
                                   if (baseItem) baseQty = baseItem.quantity;
                               }
-                              const currentCost = item.quantity * unitPrice;
-                              const baselineCost = baseQty * unitPrice;
-                              const progress = item.progress || 0;
-                              const earnedValue = currentCost * (progress / 100);
+                              const currentCost  = ic.totalCost;
+                              const baselineCost = baseQty * ic.unitCost;
+                              const earnedValue  = ic.earnedValue;
                               return { baselineCost, currentCost, earnedValue };
                           }).filter(Boolean) as any[];
 
@@ -1059,13 +880,11 @@ export const Planning: React.FC = () => {
                           </thead>
                           <tbody className="divide-y divide-slate-100">
                               {project.items.map((item, idx) => {
+                                  const ic   = itemCosts.find(c => c.id === item.id);
                                   const task = tasks.find(t => t.id === item.taskId);
-                                  if (!task) return null;
+                                  if (!ic || !task) return null;
 
-                                  // Calculate Logic (Repeated for row rendering)
-                                  const analysis = calculateUnitPrice(task, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap);
-                                  const unitPrice = analysis.totalUnitCost;
-                                  
+                                  // Costos desde itemCosts — sin recálculo de calculateUnitPrice.
                                   const snapshot = snapshots.find(s => s.id === selectedSnapshotId);
                                   let baseQty = 0;
                                   if (snapshot) {
@@ -1073,11 +892,11 @@ export const Planning: React.FC = () => {
                                       if (baseItem) baseQty = baseItem.quantity;
                                   }
 
-                                  const currentCost = item.quantity * unitPrice;
-                                  const baselineCost = baseQty * unitPrice;
-                                  const deviation = currentCost - baselineCost;
-                                  const progress = item.progress || 0;
-                                  const earnedValue = currentCost * (progress / 100);
+                                  const currentCost  = ic.totalCost;
+                                  const baselineCost = baseQty * ic.unitCost;
+                                  const deviation    = currentCost - baselineCost;
+                                  const progress     = ic.progress;
+                                  const earnedValue  = ic.earnedValue;
 
                                   return (
                                       <tr key={item.id} className="hover:bg-slate-50 transition-colors group h-10">

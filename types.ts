@@ -114,8 +114,11 @@ export interface Task {
   // NEW: Virtual properties for Sync (Pass-through objects)
   materialsYield?: TaskYield[];
   equipmentYield?: TaskToolYield[];
-  laborYield?: TaskCrewYield[]; 
+  laborYield?: TaskCrewYield[];
   laborIndividualYield?: TaskLaborYield[]; // New (Individuals)
+
+  // Trazabilidad: ID de la MasterTask origen (si la tarea fue importada desde APU Maestro)
+  masterTaskId?: string;
 }
 
 export interface TaskYield {
@@ -123,12 +126,16 @@ export interface TaskYield {
   materialId: string;
   quantity: number; // Cantidad Neta
   wastePercent?: number; // Desperdicio Real Adicional
+  organizationId?: string;
+  resourceId?: string; // UUID recurso — motor de costos versionado
 }
 
 export interface TaskToolYield {
   taskId: string;
   toolId: string;
   hoursPerUnit: number;
+  organizationId?: string;
+  resourceId?: string; // UUID recurso — motor de costos versionado
 }
 
 export interface TaskCrewYield {
@@ -141,6 +148,8 @@ export interface TaskLaborYield {
   taskId: string;
   laborCategoryId: string;
   quantity: number; // Cantidad de oficiales (ej: 0.5, 1, 2)
+  organizationId?: string;
+  resourceId?: string; // UUID recurso — motor de costos versionado
 }
 
 
@@ -162,11 +171,40 @@ export interface CalendarPreset {
 }
 
 // Estructura de Gastos Indirectos (PDF Costos)
+// Modelo legacy — se mantiene para compatibilidad con project.pricing existente.
+// El nuevo Cuadro Empresario usa BusinessConfig (ver store/useBudgetKStore.ts).
 export interface PricingConfig {
     generalExpensesPercent: number; // Gastos Generales (GGO + GGE) -> COSTO INDIRECTO
     financialExpensesPercent: number; // Gastos Financieros
     profitPercent: number; // Beneficio / Utilidad
     taxPercent: number; // Impuestos (IVA/IIBB)
+}
+
+/**
+ * Cuadro Empresario — Coeficiente de Pase K.
+ * Todos los porcentajes se almacenan como decimales: 0.08 = 8 %.
+ * GGD  = Gastos Generales Directos  (obra, equipo, plantel en sitio).
+ * GGI  = Gastos Generales Indirectos (administración, financieros, seguros).
+ */
+export interface BusinessConfig {
+  ggdPct:    number; // Gastos Generales Directos   (ej: 0.08)
+  ggiPct:    number; // Gastos Generales Indirectos (ej: 0.07)
+  profitPct: number; // Beneficio / Utilidad        (ej: 0.10)
+  taxPct:    number; // Impuestos IVA / IIBB        (ej: 0.21)
+}
+
+/** Resultado completo del Cuadro Empresario para un presupuesto. */
+export interface BudgetKSummary {
+  directCost:           number; // CD — suma de todos los items
+  ggdAmount:            number; // CD × ggdPct
+  ggiAmount:            number; // CD × ggiPct
+  subtotalBeforeProfit: number; // CD + GGD + GGI
+  profitAmount:         number; // subtotalBeforeProfit × profitPct
+  subtotalBeforeTax:    number; // subtotalBeforeProfit + profitAmount
+  taxAmount:            number; // subtotalBeforeTax × taxPct
+  finalSalePrice:       number; // subtotalBeforeTax + taxAmount
+  kFactor:              number; // finalSalePrice / directCost (1 si CD = 0)
+  businessConfig:       BusinessConfig;
 }
 
 // NEW: Helper interfaces for Project specific labor definition
@@ -213,15 +251,26 @@ export interface Project {
   foundationType?: string; // Platea, Zapatas, etc.
 
   // Pricing Structure
+  // LEGACY: solo vive en TypeScript/localStorage, nunca se persiste en Supabase.
+  // Usar businessConfig para persistencia real.
   pricing?: PricingConfig;
+
+  // Cuadro Empresario K — modelo persistido en Supabase (columnas ggd_pct, etc.)
+  // undefined = proyecto sin config guardada; el store usa DEFAULT_BUSINESS_CONFIG.
+  businessConfig?: BusinessConfig;
 
   // NEW: Project Specific Resource Availability
   laborForce?: ProjectLaborDefinition[]; // Available individual workers
   assignedCrews?: ProjectCrewDefinition[]; // Available crews
+
+  // Motor de costos versionado (migration 010)
+  costBase?: string; // YYYY-MM-DD último día del mes — "Base Marzo 2026" = "2026-03-31"
 }
 
 export interface BudgetItem {
   id: string;
+  projectId?: string;      // Set automatically by ERPContext; optional for legacy migration
+  organizationId?: string; // Set automatically by ERPContext; required by Supabase RLS
   taskId: string; // Foreign Key to Master Task
   
   // Project-Specific Overrides (The "Task" entity in the requested schema)
@@ -330,6 +379,38 @@ export interface Certification {
     status: 'pending' | 'approved' | 'paid';
     evidenceUrl?: string; // URL de fotos analizadas por Visión Artificial
     approvalStatus?: 'pending_review' | 'approved' | 'rejected';
+}
+
+// --- PROJECT CERTIFICATES MODULE (Certificados de Avance de Obra) ---
+// Entidad separada de Certification (subcontratistas).
+// Snapshot inmutable: los valores se congelan al momento de emisión y no cambian
+// aunque luego cambien los precios del presupuesto o el avance de los ítems.
+
+export interface ProjectCertificateItem {
+  budgetItemId: string;
+  taskId: string;
+  description: string;        // snapshot del nombre de tarea al momento de emisión
+  unit: string;
+  quantity: number;
+  unitPrice: number;          // snapshot de itemCost.unitCost al momento de emisión
+  totalBudgeted: number;      // quantity * unitPrice (snapshot)
+  progressPercent: number;    // item.progress al momento de emisión (0–100)
+  amountCertified: number;    // totalBudgeted * progressPercent / 100 (snapshot)
+}
+
+export interface ProjectCertificate {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  number: number;              // secuencial por projectId (1, 2, 3…)
+  period: string;              // "YYYY-MM"
+  date: string;                // ISO timestamp de emisión
+  items: ProjectCertificateItem[];
+  totalBudgeted: number;       // BAC snapshot al momento de emisión
+  totalCertified: number;      // sum(amountCertified) — avance acumulado hasta este certificado
+  previouslyCertified: number; // totalCertified del certificado anterior (0 si es el primero)
+  thisPeriodAmount: number;    // totalCertified - previouslyCertified
+  status: 'draft' | 'issued' | 'approved';
 }
 
 // --- DOCUMENT MANAGEMENT MODULE ---
@@ -482,6 +563,87 @@ export interface Snapshot {
     data?: any;
 }
 
+// --- BASE MAESTRA DE TAREAS / APU (nivel organización, persistida en localStorage v1) ---
+// Catálogo corporativo reutilizable de tareas con rendimientos estándar.
+// Independiente de Task (nivel proyecto). Sin tocar ERPContext.
+
+export interface MasterTaskMaterial {
+  id: string;                    // crypto.randomUUID() — local
+  masterMaterialId?: string;     // FK opcional a MasterMaterial (Supabase)
+  materialName: string;          // snapshot del nombre (desacopla del online)
+  unit: string;                  // snapshot de unidad
+  quantity: number;              // cantidad por unidad de tarea
+  wastePercent?: number;         // % desperdicio adicional
+  lastKnownUnitPrice?: number;   // precio capturado al agregar línea — evita depender del online
+  // Motor recursivo (migration 010)
+  resourceId?: string;           // UUID del recurso en resources — fuente de costo versionado
+  subMasterTaskId?: string;      // UUID de otro MasterTask — APU anidado (recursivo)
+  conversionFactor?: number;     // factor unidad rendimiento → unidad base recurso (ej: bolsa 50kg → 50)
+}
+
+export interface MasterTaskLabor {
+  id: string;
+  laborCategoryId: string;       // FK a LaborCategory (localStorage vía ERPContext)
+  laborCategoryName: string;     // snapshot
+  quantity: number;              // cantidad de trabajadores (ej: 1.0 oficial, 0.5 ayudante)
+  // Motor recursivo (migration 010)
+  resourceId?: string;           // UUID del recurso LABOR — tarifa actualizada por índice
+  snapshotHourlyRate?: number;   // tarifa/h capturada al importar — fallback si sin resourceId
+}
+
+export interface MasterTaskEquipment {
+  id: string;
+  toolId: string;                // FK a Tool (localStorage vía ERPContext)
+  toolName: string;              // snapshot
+  hoursPerUnit: number;          // horas de uso por unidad de tarea (h/u)
+  // Motor recursivo (migration 010)
+  resourceId?: string;           // UUID del recurso EQUIPMENT — costo/h actualizado por índice
+  snapshotCostPerHour?: number;  // costo/h capturado al importar — fallback si sin resourceId
+}
+
+export interface MasterTask {
+  id: string;
+  organizationId: string;
+  code?: string;                 // "CAP-001"
+  name: string;
+  description?: string;
+  unit: string;                  // "m2", "m3", "kg"
+  category?: string;             // Rubro: "Mampostería", "Hormigón"
+  dailyYield: number;            // u/día — DEBE ser > 0 para calcular MO
+  fixedCost?: number;            // costos fijos por unidad (fletes, subcontratos menores)
+  fixedCostDescription?: string;
+  specifications?: string;
+  tags?: string[];
+  isActive: boolean;             // soft delete
+  materials: MasterTaskMaterial[];
+  labor: MasterTaskLabor[];
+  equipment: MasterTaskEquipment[];
+  createdAt: string;             // ISO timestamp
+  updatedAt: string;
+}
+
+// --- BASE MAESTRA DE MATERIALES (nivel organización, persistida en Supabase) ---
+// Separada de Material (nivel proyecto en localStorage).
+// organization_id es text para compatibilidad con los IDs de la app actual (ej: 'org_a').
+export interface MasterMaterial {
+  id: string;              // UUID generado por Supabase
+  organizationId: string;  // Mapea a organization_id en DB
+  code?: string;           // Código interno: "MAT-0001"
+  name: string;
+  description?: string;
+  unit: string;            // "kg", "m3", "bolsa"
+  unitPrice: number;       // Precio unitario actual
+  currency: string;        // "ARS" | "USD"
+  category?: string;       // "Cemento", "Hierros", "Sanitarios"
+  supplier?: string;       // Proveedor habitual
+  commercialFormat?: string; // "Bolsa 50kg", "Barra 12m"
+  wastePercent?: number;   // % desperdicio estándar
+  isActive: boolean;       // Soft delete
+  lastPriceUpdate?: string; // ISO timestamp
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface UnitPriceAnalysis {
     taskId?: string;
     materialCost: number;
@@ -492,4 +654,121 @@ export interface UnitPriceAnalysis {
     materials?: any[];
     labor?: any[];
     tools?: any[];
+}
+
+// --- PLANTILLAS DE PRESUPUESTO ---
+// Agrupación reutilizable de MasterTask con cantidades predefinidas.
+// Independiente de ERPContext, persistida en localStorage.
+
+export interface BudgetTemplateItem {
+  masterTaskId: string;
+  quantity?: number;    // cantidad default al aplicar la plantilla
+  sortOrder: number;
+}
+
+export interface BudgetTemplate {
+  id: string;
+  organizationId: string;
+  name: string;
+  description?: string;
+  category?: string;    // rubro principal o etiqueta libre
+  items: BudgetTemplateItem[];
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Supabase Auth — tipos organizacionales ───────────────────────────────────
+
+/** Roles tal como están definidos en la tabla organization_members (DB real) */
+export type OrgRole = 'owner' | 'admin' | 'editor' | 'viewer';
+
+export interface Organization {
+  id: string;           // UUID
+  name: string;
+  slug?: string;
+  createdAt?: string;
+}
+
+/**
+ * Perfil del usuario en public.profiles.
+ * Columnas reales: id, full_name, email, default_organization_id, created_at.
+ * email se sincroniza desde auth.users vía trigger.
+ */
+export interface Profile {
+  id: string;           // mismo UUID que auth.users.id
+  fullName?: string;
+  email?: string;       // snapshot sincronizado desde auth.users
+  defaultOrganizationId?: string; // UUID — org activa por defecto
+  createdAt?: string;
+}
+
+/** Membresía de un usuario en una organización */
+export interface OrganizationMember {
+  id: string;
+  userId: string;
+  organizationId: string;
+  role: OrgRole;        // valores reales del DB: owner | admin | editor | viewer
+  organization?: Organization; // join eager
+  // Campos enriquecidos (join a profiles) — disponibles via listOrgMembers
+  fullName?: string;
+  email?: string;
+}
+
+// ─── Motor de costos recursivo ────────────────────────────────────────────────
+
+/** Recurso del catálogo (global o de organización). Tabla: public.resources */
+export interface Resource {
+  id: string;                   // UUID
+  catalogId?: string;           // FK a public.catalogs
+  organizationId?: string;      // UUID — null = global
+  code?: string;
+  name: string;
+  unit: string;                 // unidad base: "KG", "M3", "HS", etc.
+  type: 'MATERIAL' | 'LABOR' | 'EQUIPMENT' | 'SUBCONTRACT';
+  baseCost: number;             // costo de referencia / fallback sin snapshot
+  socialChargesPct?: number;    // % cargas sociales (informativo, no usado por fórmula)
+  isActive: boolean;
+  pricingNotes?: string;
+  currentSnapshotId?: string;   // UUID — caché del snapshot vigente HOY
+}
+
+/** Resultado de calcular el costo unitario de un MasterTask con el motor recursivo */
+export interface RecursiveAPUResult {
+  materialCost:  number;
+  laborCost:     number;
+  equipmentCost: number;
+  fixedCost:     number;
+  totalUnitCost: number;
+  warnings?: string[]; // avisos de conversión, recursos huérfanos, fallbacks usados
+}
+
+/** Contexto de ejecución del motor recursivo. Se crea una vez por recálculo. */
+export interface RecursiveEngineContext {
+  organizationId: string;         // UUID de organizations — DEBE ser UUID real, no ID legacy
+  costDate:       string;         // YYYY-MM-DD — fecha para resolver snapshot de costo
+  tasksMap:       Map<string, MasterTask>;  // masterTaskId → MasterTask
+  resourcesMap?:  Map<string, Resource>;   // resourceId → Resource (para conversión de unidades)
+  resolveCost:    (resourceId: string) => Promise<number | null>; // inyectable — facilita testing
+  visited:        Set<string>;    // cycle detection: IDs de MasterTask en el call stack actual
+  computed:       Map<string, RecursiveAPUResult>; // memoización: masterTaskId → resultado
+}
+
+/** Costo calculado de un ítem del presupuesto */
+export interface BudgetItemCost {
+  budgetItemId:  string;
+  taskId:        string;          // Task.id (nivel proyecto)
+  masterTaskId?: string;          // MasterTask.id
+  unitCost:      RecursiveAPUResult;
+  quantity:      number;
+  totalCost:     number;          // unitCost.totalUnitCost * quantity
+}
+
+/** Resultado completo del recálculo de un presupuesto con una base de costos */
+export interface BudgetCostResult {
+  projectId:       string;
+  costBase:        string;        // YYYY-MM-DD último día del mes
+  items:           BudgetItemCost[];
+  totalDirectCost: number;        // suma de todos los totalCost
+  computedAt:      string;        // ISO timestamp del cálculo
 }

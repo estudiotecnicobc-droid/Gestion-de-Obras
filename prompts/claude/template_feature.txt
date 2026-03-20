@@ -1,0 +1,38 @@
+Objetivo:
+[describir exactamente qué querés lograr]
+
+Contexto:
+- qué ya existe
+- qué módulo toca
+- qué comportamiento actual hay
+- qué problema se quiere resolver
+
+Cambios deseados:
+1) ...
+2) ...
+3) ...
+
+No tocar:
+- ...
+- ...
+- ...
+
+Restricciones:
+- cambio mínimo y seguro
+- no refactor masivo
+- no romper multiempresa
+- no romper auth/RLS
+- no reintroducir localStorage en módulos migrados
+
+Si toca Supabase:
+- generar migración SQL en `/supabase/migrations/`
+- no entregar solo SQL suelto
+- aclarar impacto esperado
+
+Entregables:
+1) diagnóstico breve
+2) implementación mínima
+3) diff resumido
+4) archivos tocados
+5) riesgos
+6) checklist QA si aplica

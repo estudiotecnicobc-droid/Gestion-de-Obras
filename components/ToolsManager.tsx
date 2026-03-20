@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useERP } from '../context/ERPContext';
+import { generateId } from '../utils/generateId';
 import { Wrench, Plus, Save } from 'lucide-react';
 import { Tool } from '../types';
 
@@ -15,7 +16,7 @@ export const ToolsManager: React.FC = () => {
     if (!newTool.name || !newTool.costPerHour) return;
     
     addTool({
-      id: crypto.randomUUID(),
+      id: generateId(),
       organizationId: 'org_a',
       name: newTool.name,
       category: newTool.category || 'General',
