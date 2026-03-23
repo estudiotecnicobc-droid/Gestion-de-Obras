@@ -7,48 +7,35 @@ import {
   ChevronsRight, Users, Check, Layout, List, PenTool,
   ZoomIn, ZoomOut, MoveRight, Sidebar, Download, Printer, FileText, ChevronLeft, ChevronRight, DollarSign, TrendingUp
 } from 'lucide-react';
-import { LinkType } from '../types';
+import { LinkType, ProjectDependency } from '../types';
 import { APUBuilder } from './APUBuilder';
+import { ResizableSplitPane } from './ResizableSplitPane';
 
 export const Planning: React.FC = () => {
   const {
     project, tasks, updateBudgetItem,
+<<<<<<< HEAD
     createSnapshot, snapshots, measurementSheets
+=======
+    yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, 
+    taskCrewYieldsIndex, crewsMap, laborCategoriesMap,
+    createSnapshot, snapshots, measurementSheets, // Added measurementSheets
+    addDependency, removeDependency
+>>>>>>> 6cbee2c18d661fde05974a40b203e053868ca294
   } = useERP();
 
   const { evm, itemCosts, scheduledItems, cpmItems, criticalPathStats } = useProjectSchedule();
 
   // --- UI STATE ---
   const [viewMode, setViewMode] = useState<'table' | 'gantt' | 'control'>('table');
-  const [editingApuId, setEditingApuId] = useState<string | null>(null);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   
   // Gantt Specific State
   const [timeScale, setTimeScale] = useState<'day' | 'week' | 'month' | 'quarter' | 'project'>('day');
   const [showSidebar, setShowSidebar] = useState(true);
-  const [sidebarWidth, setSidebarWidth] = useState(450); // Resizable sidebar width
   const [ganttScale, setGanttScale] = useState(40); // Pixels per day
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  
-  // Resizing Handler
-  const startResizing = (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = sidebarWidth;
-
-      const onMouseMove = (e: MouseEvent) => {
-          const newWidth = startWidth + (e.clientX - startX);
-          setSidebarWidth(Math.max(250, Math.min(800, newWidth)));
-      };
-
-      const onMouseUp = () => {
-          document.removeEventListener('mousemove', onMouseMove);
-          document.removeEventListener('mouseup', onMouseUp);
-      };
-
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
-  };
   
   // Collapsed Summaries State
   const [collapsedSummaries, setCollapsedSummaries] = useState<Set<string>>(new Set());
@@ -77,6 +64,215 @@ export const Planning: React.FC = () => {
       }
   };
 
+<<<<<<< HEAD
+=======
+  // --- DEPENDENCY NORMALIZATION ---
+  const allDependencies = useMemo(() => {
+      if (project.dependencies && project.dependencies.length > 0) {
+          return project.dependencies;
+      }
+      // Fallback extraction
+      const extracted: ProjectDependency[] = [];
+      project.items.forEach(item => {
+          if (item.dependencies) {
+              item.dependencies.forEach(d => {
+                  extracted.push({
+                      id: `${item.id}-${d.predecessorId}`,
+                      fromTaskId: d.predecessorId,
+                      toTaskId: item.id,
+                      type: d.type,
+                      lag: d.lag
+                  });
+              });
+          }
+      });
+      return extracted;
+  }, [project.dependencies, project.items]);
+
+  // --- 1. SCHEDULING ENGINE (FORWARD PASS) ---
+  const scheduledItems = useMemo(() => {
+    const items = project.items.map((item, index) => ({ ...item, index: index + 1 }));
+    const results: any[] = [];
+    const processedIds = new Set<string>();
+    const getProcessedItem = (id: string) => results.find(r => r.id === id);
+
+    let iterations = 0;
+    while (processedIds.size < items.length && iterations < 100) {
+      let somethingProcessed = false;
+      items.forEach(item => {
+        if (processedIds.has(item.id)) return;
+
+        const task = tasks.find(t => t.id === item.taskId);
+        if (!task) return;
+
+        const quantity = item.quantity || 0;
+        const crewSize = item.crewsAssigned || 1; 
+        const dailyCapacity = task.dailyYield * crewSize;
+        
+        // Cost Calculation
+        const analysis = calculateUnitPrice(
+            task, 
+            yieldsIndex, 
+            materialsMap, 
+            toolYieldsIndex, 
+            toolsMap, 
+            taskCrewYieldsIndex, 
+            crewsMap, 
+            laborCategoriesMap
+        );
+        const totalCost = (analysis.totalUnitCost || 0) * quantity;
+        
+        // Duration Calculation
+        const calculatedDuration = dailyCapacity > 0 ? Math.ceil(quantity / dailyCapacity) : 1;
+        const duration = item.manualDuration || calculatedDuration;
+        
+        // Predecessor Logic (Early Start)
+        let startDate = item.startDate || project.startDate;
+
+        // Use Normalized Dependencies
+        const itemPredecessors = allDependencies.filter(d => d.toTaskId === item.id);
+
+        if (itemPredecessors.length > 0) {
+          let maxStartDate = new Date(project.startDate).getTime();
+          let allDepsReady = true;
+
+          itemPredecessors.forEach(dep => {
+            const pred = getProcessedItem(dep.fromTaskId);
+            if (!pred) { allDepsReady = false; return; }
+            
+            const predEnd = new Date(pred.end).getTime();
+            const predStart = new Date(pred.start).getTime();
+            
+            let calculatedStart = predEnd;
+
+            // Handle Link Types
+            if (dep.type === LinkType.SS) {
+                calculatedStart = predStart;
+            } else if (dep.type === LinkType.FF) {
+                calculatedStart = predEnd - (duration * 86400000); 
+            } else if (dep.type === LinkType.SF) {
+                calculatedStart = predStart - (duration * 86400000);
+            } else {
+                // FS (Default)
+                calculatedStart = predEnd;
+            }
+
+            // Add Lag (Days to Ms)
+            calculatedStart += (dep.lag || 0) * 86400000;
+            
+            // Default FS gap (1 day)
+            if (dep.type === LinkType.FS || !dep.type) {
+                 calculatedStart += 86400000;
+            }
+
+            maxStartDate = Math.max(maxStartDate, calculatedStart);
+          });
+
+          if (!allDepsReady) return;
+          startDate = new Date(maxStartDate).toISOString().split('T')[0];
+        }
+
+        // Ensure start date is a working day
+        startDate = addWorkingDays(addDays(startDate, -1), 1, workingDays, nonWorkingDates); // Hack to snap to valid day
+
+        const endDate = addWorkingDays(startDate, duration, workingDays, nonWorkingDates);
+        
+        results.push({
+          ...item,
+          taskName: task.name,
+          category: task.category || 'Sin Categoría',
+          start: startDate, 
+          end: endDate,     
+          duration,
+          yieldHH: task.yieldHH || 0,
+          dailyCapacity,
+          crewSize,
+          totalCost,
+          // Temp fields for CPM
+          earlyStart: new Date(startDate).getTime(),
+          earlyFinish: new Date(endDate).getTime()
+        });
+        processedIds.add(item.id);
+        somethingProcessed = true;
+      });
+      if (!somethingProcessed) break;
+      iterations++;
+    }
+    
+    return results.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+  }, [project, tasks, workingDays, nonWorkingDates, workdayHours, yieldsIndex, materialsMap, toolYieldsIndex, toolsMap, taskCrewYieldsIndex, crewsMap, laborCategoriesMap, allDependencies]);
+
+  // --- 2. CRITICAL PATH METHOD (BACKWARD PASS) ---
+  const cpmItems = useMemo(() => {
+      if (scheduledItems.length === 0) return [];
+
+      // 1. Find Project Finish Date (Max Early Finish)
+      const projectFinish = Math.max(...scheduledItems.map(i => i.earlyFinish));
+
+      // 2. Map for quick access
+      const itemMap = new Map<string, any>(scheduledItems.map(i => [i.id, { ...i, lateStart: 0, lateFinish: 0, totalFloat: 0, isCritical: false }]));
+
+      // 3. Initialize Late Finish for tasks with no successors (they determine project end)
+      //    Actually, simpler: Initialize ALL Late Finishes to Project Finish initially? No.
+      //    Correct way: Identify successors for each node.
+      const successors: Record<string, string[]> = {};
+      scheduledItems.forEach(item => {
+          if(!successors[item.id]) successors[item.id] = [];
+      });
+      allDependencies.forEach(dep => {
+          if(!successors[dep.fromTaskId]) successors[dep.fromTaskId] = [];
+          successors[dep.fromTaskId].push(dep.toTaskId);
+      });
+
+      // 4. Backward Pass
+      // Iterate in reverse start order (roughly topological reverse)
+      const sortedReverse = [...scheduledItems].sort((a, b) => b.earlyFinish - a.earlyFinish);
+
+      sortedReverse.forEach(item => {
+          const node = itemMap.get(item.id)!;
+          const itemSuccessors = successors[item.id] || [];
+
+          if (itemSuccessors.length === 0) {
+              // No successors, LF = Project Finish
+              node.lateFinish = projectFinish;
+          } else {
+              // LF = Min(LS of successors)
+              let minLS = Number.MAX_VALUE;
+              itemSuccessors.forEach(succId => {
+                  const succ = itemMap.get(succId);
+                  // Assuming FS relationship: LS of successor - 1 day (gap) roughly
+                  // Ideally calculate based on dependency lag. 
+                  // Simplified: LS of successor. Since Succ Start depends on Node End.
+                  if (succ && succ.lateStart < minLS) {
+                      minLS = succ.lateStart;
+                  }
+              });
+              // Adjust for the gap (Start of Succ is usually End of Pred + 1 day)
+              // So End of Pred should be Start of Succ - 1 day approx (in working days logic)
+              // For simplicity in pixels/time, let's say LF = minLS.
+              node.lateFinish = minLS; 
+          }
+
+          // LS = LF - Duration
+          // Note: Duration in days needs to be converted to time delta roughly or use working days logic reverse.
+          // Simplified CPM using milliseconds:
+          const durationMs = item.earlyFinish - item.earlyStart;
+          node.lateStart = node.lateFinish - durationMs;
+
+          // Float = LS - ES (or LF - EF)
+          // Allow small epsilon for floating point dates
+          const float = (node.lateFinish - node.earlyFinish) / (1000 * 60 * 60 * 24);
+          
+          node.totalFloat = Math.max(0, float);
+          // Critical if Float is effectively 0 (e.g. < 1 day)
+          node.isCritical = node.totalFloat < 0.9;
+      });
+
+      // Sort by original Index (ID) to maintain WBS structure like MS Project
+      return Array.from(itemMap.values()).sort((a, b) => a.index - b.index);
+  }, [scheduledItems]);
+
+>>>>>>> 6cbee2c18d661fde05974a40b203e053868ca294
   // --- GANTT ITEMS (WITH SUMMARIES) ---
   // scheduledItems, cpmItems y criticalPathStats vienen de useProjectSchedule.
   const ganttItems = useMemo(() => {
@@ -245,8 +441,19 @@ export const Planning: React.FC = () => {
   };
 
   const handleSetPredecessor = (itemId: string, predId: string) => {
-      const deps = predId ? [{ predecessorId: predId, type: LinkType.FS, lag: 0 }] : [];
-      updateBudgetItem(itemId, { dependencies: deps });
+      // Remove existing predecessors (Single select logic)
+      const existing = allDependencies.filter(d => d.toTaskId === itemId);
+      existing.forEach(d => removeDependency(d.id));
+      
+      if (predId) {
+          addDependency({
+              id: crypto.randomUUID(),
+              fromTaskId: predId,
+              toTaskId: itemId,
+              type: LinkType.FS,
+              lag: 0
+          });
+      }
   };
 
   return (
@@ -394,7 +601,7 @@ export const Planning: React.FC = () => {
                                               <div className="text-[9px] text-slate-400 font-normal">{item.category}</div>
                                           </div>
                                       </div>
-                                      <button onClick={() => setEditingApuId(item.taskId)} className="text-purple-300 hover:text-purple-600 opacity-0 group-hover:opacity-100 transition-opacity" title="Ajustar Rendimiento Maestro">
+                                      <button onClick={() => setEditingItemId(item.id)} className="text-purple-300 hover:text-purple-600 opacity-0 group-hover:opacity-100 transition-opacity" title="Ajustar Rendimiento Maestro">
                                           <PenTool size={14} />
                                       </button>
                                   </td>
@@ -471,7 +678,7 @@ export const Planning: React.FC = () => {
                                   <td className="p-2 text-center">
                                       <select 
                                         className="w-full p-1 border border-slate-200 rounded text-[10px] text-slate-600 truncate"
-                                        value={item.dependencies?.[0]?.predecessorId || ''}
+                                        value={allDependencies.find(d => d.toTaskId === item.id)?.fromTaskId || ''}
                                         onChange={(e) => handleSetPredecessor(item.id, e.target.value)}
                                       >
                                           <option value="">-- Inicio --</option>
@@ -504,12 +711,12 @@ export const Planning: React.FC = () => {
           ) : (
               // --- GANTT CHART RENDERER ---
               <div className="flex-1 flex overflow-hidden">
-                  {/* SIDEBAR: Task List */}
-                  {showSidebar && (
-                      <div 
-                          className="flex-shrink-0 border-r border-slate-200 bg-white overflow-y-auto flex flex-col print:hidden relative group/sidebar"
-                          style={{ width: sidebarWidth }}
-                      >
+                  {showSidebar ? (
+                      <ResizableSplitPane
+                          storageKey="planning-gantt-sidebar"
+                          initialLeftWidth={450}
+                          left={
+                              <div className="h-full bg-white overflow-y-auto flex flex-col print:hidden">
                           <div className="h-10 bg-slate-100 border-b border-slate-200 flex items-center px-4 text-[11px] font-bold text-slate-600 uppercase sticky top-0 z-10 tracking-wide">
                               <div className="w-10 text-center border-r border-slate-200/50 mr-2">ID</div>
                               <div className="flex-1 px-2 border-r border-slate-200/50 mr-2">Tarea</div>
@@ -521,7 +728,7 @@ export const Planning: React.FC = () => {
                               <div 
                                   key={item.id} 
                                   className={`h-10 flex items-center px-4 border-b border-slate-100 hover:bg-slate-50 text-xs group cursor-pointer transition-colors ${item.type === 'summary' ? 'bg-slate-50 font-bold text-slate-800' : 'text-slate-600'} ${item.isCritical && item.type !== 'summary' ? 'bg-red-50/20' : ''}`}
-                                  onClick={() => item.type !== 'summary' && setEditingApuId(item.taskId)}
+                                  onClick={() => item.type !== 'summary' && setEditingItemId(item.id)}
                               >
                                   <div className="w-10 text-center text-slate-400 font-mono text-[10px] border-r border-slate-100 mr-2">{item.index || ''}</div>
                                   <div className="flex-1 truncate font-medium px-2 flex items-center gap-2 border-r border-slate-100 mr-2" title={item.taskName}>
@@ -538,16 +745,10 @@ export const Planning: React.FC = () => {
                               </div>
                           ))}
                           
-                          {/* Resize Handle */}
-                          <div
-                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-blue-400 transition-colors z-20 opacity-0 group-hover/sidebar:opacity-100"
-                              onMouseDown={startResizing}
-                          />
-                      </div>
-                  )}
-
-                  {/* CHART AREA */}
-                  <div className="flex-1 overflow-auto bg-slate-50 relative print:overflow-visible" ref={scrollContainerRef}>
+                              </div>
+                          }
+                          right={
+                              <div className="h-full overflow-auto bg-slate-50 relative print:overflow-visible" ref={scrollContainerRef}>
                       <div className="absolute top-0 left-0 min-w-full h-full print:static">
                           {/* SVG Canvas */}
                           <svg 
@@ -706,11 +907,11 @@ export const Planning: React.FC = () => {
                                   const fitsInside = width > textWidth + 10;
 
                                   return (
-                                      <g key={item.id} className="group cursor-pointer" onClick={() => setEditingApuId(item.taskId)}>
+                                      <g key={item.id} className="group cursor-pointer" onClick={() => setEditingItemId(item.id)}>
                                           <title>{item.taskName} - {item.duration} días</title>
                                           {/* Dependency Lines */}
-                                          {item.dependencies?.map((dep, depIdx) => {
-                                              const pred = ganttItems.find(p => p.id === dep.predecessorId);
+                                          {allDependencies.filter(d => d.toTaskId === item.id).map((dep, depIdx) => {
+                                              const pred = ganttItems.find(p => p.id === dep.fromTaskId);
                                               if (!pred) return null;
                                               
                                               // Find predator index/position
@@ -780,6 +981,15 @@ export const Planning: React.FC = () => {
                           </svg>
                       </div>
                   </div>
+                          }
+                      />
+                  ) : (
+                      <div className="flex-1 overflow-auto bg-slate-50 relative" ref={scrollContainerRef}>
+                          <div className="p-10 flex justify-center items-center h-full text-slate-400">
+                              <p>Sidebar oculto. Active el sidebar para ver la lista de tareas.</p>
+                          </div>
+                      </div>
+                  )}
               </div>
           )}
 
@@ -974,10 +1184,10 @@ export const Planning: React.FC = () => {
           </div>
       </div>
 
-      {editingApuId && (
+      {editingItemId && (
           <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-white w-full max-w-5xl h-[90vh] rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95">
-                  <APUBuilder taskId={editingApuId} onClose={() => setEditingApuId(null)} />
+                  <APUBuilder budgetItemId={editingItemId} onClose={() => setEditingItemId(null)} />
               </div>
           </div>
       )}

@@ -263,8 +263,22 @@ export interface Project {
   laborForce?: ProjectLaborDefinition[]; // Available individual workers
   assignedCrews?: ProjectCrewDefinition[]; // Available crews
 
+<<<<<<< HEAD
   // Motor de costos versionado (migration 010)
   costBase?: string; // YYYY-MM-DD último día del mes — "Base Marzo 2026" = "2026-03-31"
+=======
+  // NEW: Centralized Dependencies (Normalized Model)
+  dependencies?: ProjectDependency[];
+}
+
+export interface ProjectDependency {
+  id: string;
+  fromTaskId: string; // Predecessor (The task that must finish/start first)
+  toTaskId: string;   // Successor (The task that depends on the predecessor)
+  type: LinkType;
+  lag: number; // Days
+  note?: string;
+>>>>>>> 6cbee2c18d661fde05974a40b203e053868ca294
 }
 
 export interface BudgetItem {

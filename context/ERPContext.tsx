@@ -1,7 +1,13 @@
 
+<<<<<<< HEAD
 import React, { createContext, useContext, useMemo, useState, ReactNode, useEffect } from 'react';
 import { Material, Task, TaskYield, TaskToolYield, Tool, Project, BudgetItem, ImportResult, LaborCategory, ProjectTemplate, Snapshot, Reception, Subcontractor, Contract, Certification, CalendarPreset, ProjectDocument, MeasurementSheet, Crew, TaskCrewYield, TaskLaborYield, QualityProtocol, QualityInspection, NonConformity, ProjectCertificate } from '../types';
 import { INITIAL_PROJECT, INITIAL_RUBROS, INITIAL_CALENDAR_PRESETS, INITIAL_QUALITY_PROTOCOLS, RUBRO_PRESETS, hydrateWithOrg } from '../constants';
+=======
+import React, { createContext, useContext, useMemo, ReactNode, useEffect } from 'react';
+import { Material, Task, TaskYield, TaskToolYield, Tool, Project, BudgetItem, ImportResult, LaborCategory, ProjectTemplate, Snapshot, Reception, Subcontractor, Contract, Certification, CalendarPreset, ProjectDocument, MeasurementSheet, Crew, TaskCrewYield, TaskLaborYield, QualityProtocol, QualityInspection, NonConformity, ProjectDependency, LinkType } from '../types';
+import { INITIAL_MATERIALS, INITIAL_TASKS, INITIAL_YIELDS, INITIAL_PROJECT, INITIAL_TOOLS, INITIAL_TOOL_YIELDS, INITIAL_LABOR_CATEGORIES, INITIAL_RUBROS, INITIAL_CALENDAR_PRESETS, INITIAL_CREWS, INITIAL_CREW_YIELDS, INITIAL_QUALITY_PROTOCOLS, RUBRO_PRESETS } from '../constants';
+>>>>>>> 6cbee2c18d661fde05974a40b203e053868ca294
 import { useAuth } from './AuthContext';
 import { usePersistentState } from '../hooks/usePersistentState';
 import { projectsService } from '../services/projectsService';
@@ -68,6 +74,14 @@ interface ERPContextType {
   toolYieldsIndex: Record<string, TaskToolYield[]>;
   taskCrewYieldsIndex: Record<string, TaskCrewYield[]>;
   taskLaborYieldsIndex: Record<string, TaskLaborYield[]>;
+<<<<<<< HEAD
+=======
+  
+  // Dependency Management
+  addDependency: (dep: ProjectDependency) => void;
+  updateDependency: (id: string, updates: Partial<ProjectDependency>) => void;
+  removeDependency: (id: string) => void;
+>>>>>>> 6cbee2c18d661fde05974a40b203e053868ca294
 
   // Actions
   addMaterial: (m: Material) => void;
@@ -1027,8 +1041,94 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updateNonConformity = (id: string, updates: Partial<NonConformity>) =>
       setAllNonConformities(prev => prev.map(n => n.id === id ? { ...n, ...updates } : n));
 
+<<<<<<< HEAD
   const addProjectCertificate = (cert: ProjectCertificate) =>
       setAllProjectCertificates(prev => [...prev, cert]);
+=======
+  // --- DEPENDENCY MANAGEMENT ---
+  const detectCycle = (newDep: ProjectDependency, currentDeps: ProjectDependency[]): boolean => {
+      const graph = new Map<string, string[]>();
+      
+      // Build graph
+      currentDeps.forEach(d => {
+          if (!graph.has(d.fromTaskId)) graph.set(d.fromTaskId, []);
+          graph.get(d.fromTaskId)!.push(d.toTaskId);
+      });
+      
+      // Add new dependency tentatively
+      if (!graph.has(newDep.fromTaskId)) graph.set(newDep.fromTaskId, []);
+      graph.get(newDep.fromTaskId)!.push(newDep.toTaskId);
+
+      const visited = new Set<string>();
+      const recursionStack = new Set<string>();
+
+      const dfs = (node: string): boolean => {
+          visited.add(node);
+          recursionStack.add(node);
+
+          const neighbors = graph.get(node) || [];
+          for (const neighbor of neighbors) {
+              if (!visited.has(neighbor)) {
+                  if (dfs(neighbor)) return true;
+              } else if (recursionStack.has(neighbor)) {
+                  return true;
+              }
+          }
+
+          recursionStack.delete(node);
+          return false;
+      };
+
+      // Check from the source of the new dependency
+      if (dfs(newDep.fromTaskId)) return true;
+      
+      return false;
+  };
+
+  const addDependency = (dep: ProjectDependency) => {
+      if (!project) return;
+      
+      // 1. Validate Self-Dependency
+      if (dep.fromTaskId === dep.toTaskId) {
+          alert("No se puede crear una dependencia cíclica (misma tarea).");
+          return;
+      }
+
+      // 2. Validate Duplicates
+      const currentDeps = project.dependencies || [];
+      const exists = currentDeps.some(d => d.fromTaskId === dep.fromTaskId && d.toTaskId === dep.toTaskId);
+      if (exists) {
+          alert("Ya existe una relación entre estas tareas.");
+          return;
+      }
+
+      // 3. Validate Cycles
+      if (detectCycle(dep, currentDeps)) {
+          alert("No se puede crear la relación porque generaría un ciclo infinito.");
+          return;
+      }
+
+      // 4. Add
+      const newDeps = [...currentDeps, dep];
+      updateProjectSettings({ dependencies: newDeps });
+  };
+
+  const updateDependency = (id: string, updates: Partial<ProjectDependency>) => {
+      if (!project) return;
+      const currentDeps = project.dependencies || [];
+      const newDeps = currentDeps.map(d => d.id === id ? { ...d, ...updates } : d);
+      
+      // Re-validate cycle if topology changed (not implemented for simple updates yet)
+      
+      updateProjectSettings({ dependencies: newDeps });
+  };
+
+  const removeDependency = (id: string) => {
+      if (!project) return;
+      const newDeps = (project.dependencies || []).filter(d => d.id !== id);
+      updateProjectSettings({ dependencies: newDeps });
+  };
+>>>>>>> 6cbee2c18d661fde05974a40b203e053868ca294
 
   return (
     <ERPContext.Provider value={{
@@ -1055,8 +1155,13 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       createNewProject, setActiveProject, deleteProject, saveProject, exitProject,
       // Quality
       addQualityProtocol, updateQualityProtocol, addQualityInspection, addNonConformity, updateNonConformity,
+<<<<<<< HEAD
       // Project Certificates
       projectCertificates, addProjectCertificate
+=======
+      // Dependencies
+      addDependency, updateDependency, removeDependency
+>>>>>>> 6cbee2c18d661fde05974a40b203e053868ca294
     }}>
       {children}
     </ERPContext.Provider>
